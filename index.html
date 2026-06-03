@@ -59,7 +59,7 @@
   <div id="startScreen" class="overlay">
     <h1>PRISM RUSH</h1>
     <div class="sub">
-      <b>Drag your thumb</b> anywhere to steer with the joystick. <b>Absorb</b> the glowing orbs to score.
+      <b>Drag the joystick</b> at the bottom to steer. <b>Absorb</b> the glowing orbs to score.
       <b>Dodge</b> the red shards — one hit ends your run.<br><br>
       Your combo multiplier <b>decays fast</b> — keep collecting to keep it alive.
       Skim hazards for <b>close-call bonuses</b>. Grab gold for <b>slow-mo</b>.<br><br>
@@ -105,26 +105,21 @@
   resize();
 
   // ---- input ----
-  // ---- floating joystick (thumb steering; keeps your finger off the orb) ----
-  const joy = { active:false, ox:0, oy:0, kx:0, ky:0, dx:0, dy:0 };
-  const JOY_R = 64; // max knob travel in px
-  function joyStart(cx, cy) {
+  // ---- fixed joystick pinned at bottom-center, always visible ----
+  const joy = { active:false, dx:0, dy:0 };
+  const JOY_R = 64;          // max knob travel in px
+  const joyHX = () => W/2;   // home position (recomputed from current size)
+  const joyHY = () => H - 92;
+  function joySet(cx, cy) {
     const r = canvas.getBoundingClientRect();
-    joy.active = true;
-    joy.ox = cx - r.left; joy.oy = cy - r.top;
-    joy.kx = joy.ox; joy.ky = joy.oy;
-    joy.dx = 0; joy.dy = 0;
-  }
-  function joyMove(cx, cy) {
-    if (!joy.active) return;
-    const r = canvas.getBoundingClientRect();
-    let vx = (cx - r.left) - joy.ox;
-    let vy = (cy - r.top)  - joy.oy;
+    let vx = (cx - r.left) - joyHX();
+    let vy = (cy - r.top)  - joyHY();
     const m = Math.hypot(vx, vy);
     if (m > JOY_R) { vx = vx/m*JOY_R; vy = vy/m*JOY_R; }
-    joy.kx = joy.ox + vx; joy.ky = joy.oy + vy;
     joy.dx = vx / JOY_R; joy.dy = vy / JOY_R;
   }
+  function joyStart(cx, cy) { joy.active = true; joySet(cx, cy); }
+  function joyMove(cx, cy) { if (joy.active) joySet(cx, cy); }
   function joyEnd() { joy.active = false; joy.dx = 0; joy.dy = 0; }
 
   // touch drives the joystick while playing; taps when not playing start a run
@@ -673,16 +668,19 @@
         ctx.restore();
       }
 
-      // joystick
-      if (joy.active) {
+      // joystick — always visible, pinned at bottom-center
+      {
+        const hx = joyHX(), hy = joyHY();
+        const kx = hx + joy.dx * JOY_R, ky = hy + joy.dy * JOY_R;
+        const a = joy.active ? 1 : 0.55;
         ctx.save();
         ctx.lineWidth = 2;
-        ctx.strokeStyle = 'rgba(174,243,255,0.35)';
-        ctx.fillStyle = 'rgba(120,160,255,0.10)';
-        ctx.beginPath(); ctx.arc(joy.ox, joy.oy, JOY_R, 0, 7); ctx.fill(); ctx.stroke();
-        ctx.fillStyle = 'rgba(174,243,255,0.55)';
-        ctx.shadowColor = '#7af0ff'; ctx.shadowBlur = 16;
-        ctx.beginPath(); ctx.arc(joy.kx, joy.ky, 26, 0, 7); ctx.fill();
+        ctx.strokeStyle = 'rgba(174,243,255,' + (0.30*a) + ')';
+        ctx.fillStyle = 'rgba(120,160,255,' + (0.08*a) + ')';
+        ctx.beginPath(); ctx.arc(hx, hy, JOY_R, 0, 7); ctx.fill(); ctx.stroke();
+        ctx.fillStyle = 'rgba(174,243,255,' + (0.45*a) + ')';
+        ctx.shadowColor = '#7af0ff'; ctx.shadowBlur = joy.active ? 16 : 8;
+        ctx.beginPath(); ctx.arc(kx, ky, 24, 0, 7); ctx.fill();
         ctx.restore();
       }
     }
