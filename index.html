@@ -59,9 +59,10 @@
   <div id="startScreen" class="overlay">
     <h1>PRISM RUSH</h1>
     <div class="sub">
-      <b>Drag the joystick</b> at the bottom to steer. <b>Absorb</b> the glowing orbs to score.
+      <b>Drag anywhere</b> to steer — the orb floats just above your finger. <b>Absorb</b> the glowing orbs to score.
       <b>Dodge</b> the red shards — one hit ends your run.<br><br>
       Your combo multiplier <b>decays fast</b> — keep collecting to keep it alive.
+      Hit <b style="color:#ffd24a">x20 combo</b> for <b style="color:#ff5ed0">⚡ FRENZY x2 ⚡</b>.
       Skim hazards for <b>close-call bonuses</b>. Grab gold for <b>slow-mo</b>.<br><br>
       Catch <b>power orbs</b> (30s each): <b style="color:#5dff8f">Magnet</b> pulls orbs in,
       <b style="color:#bfe0ff">Invisible</b> lets red shards pass through you — but the
@@ -105,37 +106,29 @@
   resize();
 
   // ---- input ----
-  // ---- fixed joystick pinned at bottom-center, always visible ----
-  const joy = { active:false, dx:0, dy:0 };
-  const JOY_R = 64;          // max knob travel in px
-  const joyHX = () => W/2;   // home position (recomputed from current size)
-  const joyHY = () => H - 92;
-  function joySet(cx, cy) {
+  // ---- drag to steer; the orb floats above your finger so it's never covered ----
+  const drag = { on:false, tx:W/2, ty:H/2 };
+  const FINGER_OFFSET = 64; // px the orb sits above your fingertip on touch
+  function dragSet(cx, cy, touch) {
     const r = canvas.getBoundingClientRect();
-    let vx = (cx - r.left) - joyHX();
-    let vy = (cy - r.top)  - joyHY();
-    const m = Math.hypot(vx, vy);
-    if (m > JOY_R) { vx = vx/m*JOY_R; vy = vy/m*JOY_R; }
-    joy.dx = vx / JOY_R; joy.dy = vy / JOY_R;
+    drag.tx = cx - r.left;
+    drag.ty = (cy - r.top) - (touch ? FINGER_OFFSET : 0);
+    drag.tx = Math.max(0, Math.min(W, drag.tx));
+    drag.ty = Math.max(0, Math.min(H, drag.ty));
   }
-  function joyStart(cx, cy) { joy.active = true; joySet(cx, cy); }
-  function joyMove(cx, cy) { if (joy.active) joySet(cx, cy); }
-  function joyEnd() { joy.active = false; joy.dx = 0; joy.dy = 0; }
-
-  // touch drives the joystick while playing; taps when not playing start a run
   canvas.addEventListener('touchstart', e => {
-    if (state === STATE.PLAY) { const t = e.touches[0]; joyStart(t.clientX, t.clientY); e.preventDefault(); }
+    if (state === STATE.PLAY) { const t = e.touches[0]; drag.on = true; dragSet(t.clientX, t.clientY, true); e.preventDefault(); }
   }, {passive:false});
   canvas.addEventListener('touchmove', e => {
-    if (joy.active) { const t = e.touches[0]; joyMove(t.clientX, t.clientY); e.preventDefault(); }
+    if (drag.on) { const t = e.touches[0]; dragSet(t.clientX, t.clientY, true); e.preventDefault(); }
   }, {passive:false});
-  canvas.addEventListener('touchend', joyEnd, {passive:true});
-  canvas.addEventListener('touchcancel', joyEnd, {passive:true});
+  canvas.addEventListener('touchend', () => { drag.on = false; }, {passive:true});
+  canvas.addEventListener('touchcancel', () => { drag.on = false; }, {passive:true});
 
-  // mouse drag also drives the joystick (handy on desktop)
-  canvas.addEventListener('mousedown', e => { if (state === STATE.PLAY) joyStart(e.clientX, e.clientY); });
-  window.addEventListener('mousemove', e => { if (joy.active) joyMove(e.clientX, e.clientY); });
-  window.addEventListener('mouseup', joyEnd);
+  // mouse drag steers on desktop
+  canvas.addEventListener('mousedown', e => { if (state === STATE.PLAY) { drag.on = true; dragSet(e.clientX, e.clientY, false); } });
+  window.addEventListener('mousemove', e => { if (drag.on) dragSet(e.clientX, e.clientY, false); });
+  window.addEventListener('mouseup', () => { drag.on = false; });
 
   // ---- sound (Web Audio, no asset files) ----
   const Sound = (() => {
@@ -212,7 +205,7 @@
   let state = STATE.MENU;
   let player, orbs, particles, stars, score, combo, comboTimer, maxCombo,
       spawnT, hazardChance, elapsed, slowmo, shake, best, deathT, ringPulse,
-      eaten, speedLevel, flashMsg, flashT, abilities;
+      eaten, speedLevel, flashMsg, flashT, abilities, pops, frenzy, hueShift;
 
   const ABILITY_TIME = 30; // seconds each ability lasts
 
@@ -235,6 +228,7 @@
     slowmo = 0; shake = 0; ringPulse = 0;
     eaten = 0; speedLevel = 0; flashMsg = ''; flashT = 0;
     abilities = { magnet:0, ghost:0, swarm:0 };
+    pops = []; frenzy = 0; hueShift = 0;
     initStars();
   }
 
@@ -280,13 +274,43 @@
     }
   }
 
+  function buzz(ms) { if (navigator.vibrate) { try { navigator.vibrate(ms); } catch (e) {} } }
+
+  function popText(x, y, text, color, big) {
+    pops.push({ x, y, text, color, big: !!big, life: 1, vy: -0.7 });
+    if (pops.length > 40) pops.shift();
+  }
+
   function addScore(n) {
-    score += Math.round(n * combo);
+    const gained = Math.round(n * combo * (frenzy > 0 ? 2 : 1));
+    score += gained;
+    return gained;
   }
 
   function bumpCombo() {
     combo++; comboTimer = 1; // full combo bar
     if (combo > maxCombo) maxCombo = combo;
+    // milestone celebration every 5
+    if (combo % 5 === 0) {
+      flashMsg = 'COMBO x' + combo + '  🔥';
+      flashT = 1;
+      shake = Math.min(1, shake + 0.45);
+      ringPulse = 0.9;
+      Sound.levelup();
+      buzz([0, 30, 40, 30]);
+      popText(player.x, player.y - 26, 'COMBO x' + combo, '#ffd24a', true);
+    }
+    // FRENZY: hit a big combo -> 6s of double points + rainbow
+    if (combo === 20 && frenzy <= 0) {
+      frenzy = 6;
+      flashMsg = '⚡ FRENZY x2 ⚡';
+      flashT = 1;
+      shake = Math.min(1, shake + 0.7);
+      burst(player.x, player.y, '#ff5ed0', 40, 8);
+      burst(player.x, player.y, '#7af0ff', 30, 7);
+      Sound.power();
+      buzz([0, 60, 50, 60, 50, 80]);
+    }
   }
 
   // called when an orb is absorbed; every 50 -> new color + 1 speed
@@ -350,6 +374,15 @@
       if (p.life <= 0) particles.splice(i,1);
     }
 
+    // floating score popups
+    for (let i=pops.length-1;i>=0;i--){
+      const p = pops[i];
+      p.y += p.vy*dt; p.vy *= 0.96;
+      p.life -= 0.018*dt;
+      if (p.life <= 0) pops.splice(i,1);
+    }
+    hueShift = (hueShift + dt*6) % 360;
+
     if (shake > 0) shake = Math.max(0, shake - 0.06*dt);
     if (ringPulse > 0) ringPulse = Math.max(0, ringPulse - 0.05*dt);
     if (flashT > 0) flashT = Math.max(0, flashT - 0.014*dt);
@@ -360,6 +393,7 @@
 
     // ability countdowns (real seconds)
     for (const k in abilities) if (abilities[k] > 0) abilities[k] = Math.max(0, abilities[k] - dt/60);
+    if (frenzy > 0) frenzy = Math.max(0, frenzy - dt/60);
 
     // difficulty ramp
     hazardChance = Math.min(0.42, 0.18 + elapsed*0.006);
@@ -374,15 +408,10 @@
       else comboTimer = 0;
     }
 
-    // joystick velocity with easing for smooth accel/decel — top speed grows +1 per level
-    const sp = 5.6 + speedLevel * 0.8;
-    const ease = Math.min(1, 0.26 * dt);
-    player.vx += (joy.dx * sp - player.vx) * ease;
-    player.vy += (joy.dy * sp - player.vy) * ease;
-    player.x += player.vx * dt;
-    player.y += player.vy * dt;
-    if (player.x <= player.r || player.x >= W - player.r) player.vx = 0;
-    if (player.y <= player.r || player.y >= H - player.r) player.vy = 0;
+    // smoothly follow the drag target — responsiveness grows +1 per level
+    const follow = Math.min(0.9, 0.34 + speedLevel * 0.05);
+    player.x += (drag.tx - player.x) * Math.min(1, follow*dt);
+    player.y += (drag.ty - player.y) * Math.min(1, follow*dt);
     player.x = Math.max(player.r, Math.min(W-player.r, player.x));
     player.y = Math.max(player.r, Math.min(H-player.r, player.y));
     player.trail.push({x:player.x, y:player.y});
@@ -420,11 +449,12 @@
       if (o.type==='hazard' && !o.near) {
         if (d2 < (collideR+26)*(collideR+26) && d2 > collideR*collideR) {
           o.near = true;
-          addScore(15);
-          combo += 0; // close calls don't break combo, give bonus
+          const g = addScore(15);
+          popText(player.x, player.y - 22, '+' + g + ' CLOSE!', '#7af0ff');
           burst(player.x, player.y, '#7af0ff', 6, 3);
           ringPulse = 0.7;
           Sound.close();
+          buzz(12);
         }
       }
 
@@ -443,18 +473,22 @@
           orbs.splice(i,1);
         } else if (o.type==='gold') {
           slowmo = 70; // ~ a bit over a second of slow-mo
-          addScore(60); bumpCombo();
+          const g = addScore(60); bumpCombo();
+          popText(o.x, o.y, '+' + g, '#ffd86b', true);
           burst(o.x,o.y,'#ffd86b',26,6);
           shake = Math.min(1, shake+0.5);
           Sound.gold();
+          buzz(20);
           eat();
           orbs.splice(i,1);
         } else {
-          addScore(10); bumpCombo();
-          burst(o.x,o.y,'#7ad1ff',12,4.5);
+          const g = addScore(10); bumpCombo();
+          popText(o.x, o.y, '+' + g, frenzy > 0 ? '#ff5ed0' : '#aef3ff');
+          burst(o.x,o.y, frenzy > 0 ? '#ff5ed0' : '#7ad1ff',12,4.5);
           shake = Math.min(1, shake+0.15);
           ringPulse = Math.max(ringPulse, 0.5);
           Sound.collect(combo - 1);
+          buzz(8);
           eat();
           orbs.splice(i,1);
         }
@@ -467,6 +501,7 @@
     deathT = now;
     shake = 1;
     Sound.death();
+    buzz([0, 80, 40, 120]);
     burst(player.x, player.y, '#ff5a7a', 50, 8);
     burst(player.x, player.y, '#fff', 24, 5);
     const isRec = score > best;
@@ -579,6 +614,35 @@
     }
     ctx.globalAlpha=1;
 
+    // floating score popups
+    if (pops.length) {
+      ctx.textAlign='center'; ctx.textBaseline='middle';
+      for (const p of pops) {
+        ctx.globalAlpha = Math.max(0, Math.min(1, p.life));
+        const sz = (p.big ? 26 : 18) + (1 - p.life) * 6;
+        ctx.font = '800 ' + sz + 'px system-ui';
+        ctx.fillStyle = p.color;
+        ctx.shadowColor = p.color; ctx.shadowBlur = 12;
+        ctx.fillText(p.text, p.x, p.y);
+        ctx.shadowBlur = 0;
+      }
+      ctx.globalAlpha = 1;
+    }
+
+    // FRENZY rainbow edge glow
+    if (frenzy > 0) {
+      ctx.save();
+      ctx.globalAlpha = (0.3 + 0.18*Math.sin(now*0.02)) * Math.min(1, frenzy*2.5);
+      const grad = ctx.createLinearGradient(0,0,W,H);
+      grad.addColorStop(0,   'hsl('+ (hueShift%360)        +',100%,62%)');
+      grad.addColorStop(0.5, 'hsl('+ ((hueShift+120)%360)  +',100%,62%)');
+      grad.addColorStop(1,   'hsl('+ ((hueShift+240)%360)  +',100%,62%)');
+      ctx.lineWidth = 16; ctx.strokeStyle = grad;
+      ctx.shadowColor = 'hsl('+ (hueShift%360) +',100%,62%)'; ctx.shadowBlur = 24;
+      ctx.strokeRect(8,8,W-16,H-16);
+      ctx.restore();
+    }
+
     // player
     if (state===STATE.PLAY || state===STATE.MENU) {
       const pal = PALETTE[speedLevel % PALETTE.length];
@@ -673,21 +737,6 @@
         ctx.restore();
       }
 
-      // joystick — always visible, pinned at bottom-center
-      {
-        const hx = joyHX(), hy = joyHY();
-        const kx = hx + joy.dx * JOY_R, ky = hy + joy.dy * JOY_R;
-        const a = joy.active ? 1 : 0.55;
-        ctx.save();
-        ctx.lineWidth = 2;
-        ctx.strokeStyle = 'rgba(174,243,255,' + (0.30*a) + ')';
-        ctx.fillStyle = 'rgba(120,160,255,' + (0.08*a) + ')';
-        ctx.beginPath(); ctx.arc(hx, hy, JOY_R, 0, 7); ctx.fill(); ctx.stroke();
-        ctx.fillStyle = 'rgba(174,243,255,' + (0.45*a) + ')';
-        ctx.shadowColor = '#7af0ff'; ctx.shadowBlur = joy.active ? 16 : 8;
-        ctx.beginPath(); ctx.arc(kx, ky, 24, 0, 7); ctx.fill();
-        ctx.restore();
-      }
     }
   }
 
