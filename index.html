@@ -50,11 +50,6 @@
   .row { display:flex; gap:26px; margin-top:6px; }
   .stat { display:flex; flex-direction:column; gap:2px; }
   .new-rec { color:#ffd86b; font-weight:800; letter-spacing:2px; font-size:18px; animation:blink 1s infinite; }
-  .tiltbtn { margin-top:18px; padding:14px 22px; font-size:17px; font-weight:700; color:#eaf2ff; cursor:pointer;
-    border-radius:14px; border:1px solid rgba(120,160,255,.45); background:rgba(120,160,255,.18); -webkit-tap-highlight-color:transparent; }
-  .tiltbtn:active { transform:scale(.96); }
-  .tiltbtn.ok { border-color:rgba(93,255,143,.6); background:rgba(93,255,143,.16); color:#bfffd0; }
-  .tiltstatus { margin-top:10px; font-size:13px; min-height:18px; color:#9fb0d8; max-width:420px; }
 </style>
 </head>
 <body>
@@ -64,7 +59,7 @@
   <div id="startScreen" class="overlay">
     <h1>PRISM RUSH</h1>
     <div class="sub">
-      <b>Tilt</b> your phone to steer (or use mouse/finger). <b>Absorb</b> the glowing orbs to score.
+      <b>Drag your thumb</b> anywhere to steer with the joystick. <b>Absorb</b> the glowing orbs to score.
       <b>Dodge</b> the red shards — one hit ends your run.<br><br>
       Your combo multiplier <b>decays fast</b> — keep collecting to keep it alive.
       Skim hazards for <b>close-call bonuses</b>. Grab gold for <b>slow-mo</b>.<br><br>
@@ -72,8 +67,6 @@
       <b style="color:#bfe0ff">Invisible</b> lets red shards pass through you — but the
       <b style="color:#ff4060">red Swarm</b> makes every hazard hunt you. Avoid that one.
     </div>
-    <button id="tiltBtn" class="tiltbtn">📱 Enable Tilt Controls</button>
-    <div id="tiltStatus" class="tiltstatus"></div>
     <div class="pulse">Tap the board (or press SPACE) to start</div>
   </div>
 
@@ -112,68 +105,42 @@
   resize();
 
   // ---- input ----
-  const mouse = { x: W/2, y: H/2, has:false };
-  function setPos(clientX, clientY) {
+  // ---- floating joystick (thumb steering; keeps your finger off the orb) ----
+  const joy = { active:false, ox:0, oy:0, kx:0, ky:0, dx:0, dy:0 };
+  const JOY_R = 64; // max knob travel in px
+  function joyStart(cx, cy) {
     const r = canvas.getBoundingClientRect();
-    mouse.x = clientX - r.left;
-    mouse.y = clientY - r.top;
-    mouse.has = true;
+    joy.active = true;
+    joy.ox = cx - r.left; joy.oy = cy - r.top;
+    joy.kx = joy.ox; joy.ky = joy.oy;
+    joy.dx = 0; joy.dy = 0;
   }
-  canvas.addEventListener('mousemove', e => setPos(e.clientX, e.clientY));
-  canvas.addEventListener('touchmove', e => { const t = e.touches[0]; setPos(t.clientX, t.clientY); e.preventDefault(); }, {passive:false});
-  canvas.addEventListener('touchstart', e => { const t = e.touches[0]; setPos(t.clientX, t.clientY); }, {passive:true});
+  function joyMove(cx, cy) {
+    if (!joy.active) return;
+    const r = canvas.getBoundingClientRect();
+    let vx = (cx - r.left) - joy.ox;
+    let vy = (cy - r.top)  - joy.oy;
+    const m = Math.hypot(vx, vy);
+    if (m > JOY_R) { vx = vx/m*JOY_R; vy = vy/m*JOY_R; }
+    joy.kx = joy.ox + vx; joy.ky = joy.oy + vy;
+    joy.dx = vx / JOY_R; joy.dy = vy / JOY_R;
+  }
+  function joyEnd() { joy.active = false; joy.dx = 0; joy.dy = 0; }
 
-  // ---- tilt steering (device orientation) so your finger never covers the orb ----
-  const tilt = { on:false, tx:W/2, ty:H/2, baseB:null, baseG:null };
-  const TILT_SENS = 30; // degrees of tilt from rest to reach a screen edge
-  const tiltStatusEl = document.getElementById('tiltStatus');
-  const tiltBtn = document.getElementById('tiltBtn');
-  let tiltGot = false; // have we received any real orientation reading?
-  function setTiltStatus(msg, ok) {
-    if (tiltStatusEl) tiltStatusEl.textContent = msg;
-    if (ok && tiltBtn) { tiltBtn.classList.add('ok'); tiltBtn.textContent = '📱 Tilt Enabled'; }
-  }
-  function onTilt(e) {
-    if (e.gamma == null || e.beta == null) return;
-    tilt.on = true;
-    if (!tiltGot) { tiltGot = true; setTiltStatus('Tilt ready — now tap the board to play.', true); }
-    if (tilt.baseG == null) { tilt.baseG = e.gamma; tilt.baseB = e.beta; }
-    const dx = e.gamma - tilt.baseG; // left / right
-    const dy = e.beta  - tilt.baseB; // forward / back
-    tilt.tx = Math.max(0, Math.min(W, W/2 + (dx / TILT_SENS) * (W/2)));
-    tilt.ty = Math.max(0, Math.min(H, H/2 + (dy / TILT_SENS) * (H/2)));
-  }
-  let tiltListening = false;
-  function startListening() {
-    if (tiltListening) return;
-    tiltListening = true;
-    window.addEventListener('deviceorientation', onTilt);
-    setTiltStatus('Listening… tilt your phone to test.', false);
-    // if no reading arrives shortly, the device/browser isn't sending motion data
-    setTimeout(() => { if (!tiltGot) setTiltStatus('No motion data — open in Safari (not the Home-Screen app), and check Settings ▸ Safari ▸ Motion & Orientation Access is ON.', false); }, 1500);
-  }
-  function enableTilt() {
-    const D = window.DeviceOrientationEvent;
-    if (!D) { setTiltStatus('This device/browser has no tilt sensor — use finger or mouse.', false); return; }
-    if (typeof D.requestPermission === 'function') {
-      D.requestPermission().then(p => {
-        if (p === 'granted') startListening();
-        else setTiltStatus('Permission denied. Enable in Settings ▸ Safari ▸ Motion & Orientation Access, then reload.', false);
-      }).catch(() => setTiltStatus('Couldn’t request motion access — make sure you opened this in Safari over https.', false));
-    } else {
-      startListening();
-    }
-  }
-  function autoTilt() { // devices without a permission gate (Android/desktop) just start
-    const D = window.DeviceOrientationEvent;
-    if (D && typeof D.requestPermission !== 'function') startListening();
-  }
-  if (tiltBtn) {
-    tiltBtn.addEventListener('touchstart', e => { e.stopPropagation(); }, {passive:true}); // don't let the tap start the game
-    tiltBtn.addEventListener('mousedown', e => { e.stopPropagation(); });
-    tiltBtn.addEventListener('click', e => { e.stopPropagation(); enableTilt(); });
-  }
-  function calibrateTilt() { tilt.baseG = null; tilt.baseB = null; } // current hold angle becomes center
+  // touch drives the joystick while playing; taps when not playing start a run
+  canvas.addEventListener('touchstart', e => {
+    if (state === STATE.PLAY) { const t = e.touches[0]; joyStart(t.clientX, t.clientY); e.preventDefault(); }
+  }, {passive:false});
+  canvas.addEventListener('touchmove', e => {
+    if (joy.active) { const t = e.touches[0]; joyMove(t.clientX, t.clientY); e.preventDefault(); }
+  }, {passive:false});
+  canvas.addEventListener('touchend', joyEnd, {passive:true});
+  canvas.addEventListener('touchcancel', joyEnd, {passive:true});
+
+  // mouse drag also drives the joystick (handy on desktop)
+  canvas.addEventListener('mousedown', e => { if (state === STATE.PLAY) joyStart(e.clientX, e.clientY); });
+  window.addEventListener('mousemove', e => { if (joy.active) joyMove(e.clientX, e.clientY); });
+  window.addEventListener('mouseup', joyEnd);
 
   // ---- sound (Web Audio, no asset files) ----
   const Sound = (() => {
@@ -412,12 +379,10 @@
       else comboTimer = 0;
     }
 
-    // player follows mouse smoothly — responsiveness grows +1 "speed" per level
-    const tx = tilt.on ? tilt.tx : (mouse.has ? mouse.x : W/2);
-    const ty = tilt.on ? tilt.ty : (mouse.has ? mouse.y : H/2);
-    const follow = Math.min(0.85, 0.26 + speedLevel * 0.06);
-    player.x += (tx - player.x) * Math.min(1, follow*dt);
-    player.y += (ty - player.y) * Math.min(1, follow*dt);
+    // joystick velocity — top speed grows +1 per level
+    const sp = 5.6 + speedLevel * 0.8;
+    player.x += joy.dx * sp * dt;
+    player.y += joy.dy * sp * dt;
     player.x = Math.max(player.r, Math.min(W-player.r, player.x));
     player.y = Math.max(player.r, Math.min(H-player.r, player.y));
     player.trail.push({x:player.x, y:player.y});
@@ -707,6 +672,19 @@
         ctx.fillText(flashMsg, W/2, H*0.30);
         ctx.restore();
       }
+
+      // joystick
+      if (joy.active) {
+        ctx.save();
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = 'rgba(174,243,255,0.35)';
+        ctx.fillStyle = 'rgba(120,160,255,0.10)';
+        ctx.beginPath(); ctx.arc(joy.ox, joy.oy, JOY_R, 0, 7); ctx.fill(); ctx.stroke();
+        ctx.fillStyle = 'rgba(174,243,255,0.55)';
+        ctx.shadowColor = '#7af0ff'; ctx.shadowBlur = 16;
+        ctx.beginPath(); ctx.arc(joy.kx, joy.ky, 26, 0, 7); ctx.fill();
+        ctx.restore();
+      }
     }
   }
 
@@ -715,14 +693,12 @@
     document.getElementById('startScreen').classList.add('hidden');
     document.getElementById('gameOver').classList.add('hidden');
     reset();
-    calibrateTilt(); // hold your phone however you like at the start; that becomes neutral
     state = STATE.PLAY;
     last = performance.now();
   }
 
   function action() {
     Sound.unlock(); // browsers require audio to start from a user gesture
-    autoTilt(); // Android/desktop enable on first tap; iOS uses the Enable Tilt button
     if (state===STATE.MENU) start();
     else if (state===STATE.DEAD) {
       // require overlay visible (avoid instant restart during death anim)
