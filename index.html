@@ -59,7 +59,7 @@
   <div id="startScreen" class="overlay">
     <h1>PRISM RUSH</h1>
     <div class="sub">
-      Move with your <b>mouse</b> (or finger). <b>Absorb</b> the glowing orbs to score.
+      <b>Tilt</b> your phone to steer (or use mouse/finger). <b>Absorb</b> the glowing orbs to score.
       <b>Dodge</b> the red shards — one hit ends your run.<br><br>
       Your combo multiplier <b>decays fast</b> — keep collecting to keep it alive.
       Skim hazards for <b>close-call bonuses</b>. Grab gold for <b>slow-mo</b>.<br><br>
@@ -115,6 +115,29 @@
   canvas.addEventListener('mousemove', e => setPos(e.clientX, e.clientY));
   canvas.addEventListener('touchmove', e => { const t = e.touches[0]; setPos(t.clientX, t.clientY); e.preventDefault(); }, {passive:false});
   canvas.addEventListener('touchstart', e => { const t = e.touches[0]; setPos(t.clientX, t.clientY); }, {passive:true});
+
+  // ---- tilt steering (device orientation) so your finger never covers the orb ----
+  const tilt = { on:false, tx:W/2, ty:H/2, baseB:null, baseG:null };
+  const TILT_SENS = 30; // degrees of tilt from rest to reach a screen edge
+  function onTilt(e) {
+    if (e.gamma == null || e.beta == null) return;
+    tilt.on = true;
+    if (tilt.baseG == null) { tilt.baseG = e.gamma; tilt.baseB = e.beta; }
+    const dx = e.gamma - tilt.baseG; // left / right
+    const dy = e.beta  - tilt.baseB; // forward / back
+    tilt.tx = Math.max(0, Math.min(W, W/2 + (dx / TILT_SENS) * (W/2)));
+    tilt.ty = Math.max(0, Math.min(H, H/2 + (dy / TILT_SENS) * (H/2)));
+  }
+  function enableTilt() {
+    const D = window.DeviceOrientationEvent;
+    if (!D) return;
+    if (typeof D.requestPermission === 'function') {
+      D.requestPermission().then(p => { if (p === 'granted') window.addEventListener('deviceorientation', onTilt); }).catch(() => {});
+    } else {
+      window.addEventListener('deviceorientation', onTilt);
+    }
+  }
+  function calibrateTilt() { tilt.baseG = null; tilt.baseB = null; } // current hold angle becomes center
 
   // ---- sound (Web Audio, no asset files) ----
   const Sound = (() => {
@@ -354,8 +377,8 @@
     }
 
     // player follows mouse smoothly — responsiveness grows +1 "speed" per level
-    const tx = mouse.has ? mouse.x : W/2;
-    const ty = mouse.has ? mouse.y : H/2;
+    const tx = tilt.on ? tilt.tx : (mouse.has ? mouse.x : W/2);
+    const ty = tilt.on ? tilt.ty : (mouse.has ? mouse.y : H/2);
     const follow = Math.min(0.85, 0.26 + speedLevel * 0.06);
     player.x += (tx - player.x) * Math.min(1, follow*dt);
     player.y += (ty - player.y) * Math.min(1, follow*dt);
@@ -656,12 +679,14 @@
     document.getElementById('startScreen').classList.add('hidden');
     document.getElementById('gameOver').classList.add('hidden');
     reset();
+    calibrateTilt(); // hold your phone however you like at the start; that becomes neutral
     state = STATE.PLAY;
     last = performance.now();
   }
 
   function action() {
     Sound.unlock(); // browsers require audio to start from a user gesture
+    enableTilt(); // iOS needs a tap to grant motion access
     if (state===STATE.MENU) start();
     else if (state===STATE.DEAD) {
       // require overlay visible (avoid instant restart during death anim)
