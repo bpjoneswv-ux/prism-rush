@@ -1,0 +1,688 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>PRISM RUSH</title>
+<!-- Install-as-app (Add to Home Screen) -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Prism Rush">
+<meta name="theme-color" content="#05060f">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" type="image/png" href="icon-192.png">
+<link rel="manifest" href="manifest.webmanifest">
+<style>
+  :root { --bg:#05060f; }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html, body { height:100%; overflow:hidden; background:var(--bg); }
+  body {
+    display:flex; align-items:center; justify-content:center;
+    font-family:-apple-system, "SF Pro Display", "Segoe UI", system-ui, sans-serif;
+    color:#eaf2ff; cursor:none; touch-action:none;
+  }
+  #wrap { position:relative; }
+  canvas { display:block; border-radius:18px; box-shadow:0 0 80px rgba(80,140,255,.25), 0 0 0 1px rgba(120,160,255,.15) inset; background:radial-gradient(circle at 50% 35%, #0b1030 0%, #05060f 70%); }
+
+  .overlay {
+    position:absolute; inset:0; display:flex; flex-direction:column;
+    align-items:center; justify-content:center; text-align:center;
+    background:rgba(5,6,15,.62); backdrop-filter:blur(6px);
+    border-radius:18px; padding:24px; gap:14px; cursor:none;
+    transition:opacity .25s ease;
+  }
+  .hidden { opacity:0; pointer-events:none; }
+  h1 {
+    font-size:clamp(38px, 9vw, 76px); font-weight:800; letter-spacing:4px;
+    background:linear-gradient(90deg,#5ad1ff,#a78bfa,#ff7ad9,#5ad1ff);
+    background-size:300% 100%; -webkit-background-clip:text; background-clip:text;
+    color:transparent; animation:hue 6s linear infinite; line-height:1;
+  }
+  @keyframes hue { to { background-position:300% 0; } }
+  .sub { font-size:15px; color:#9fb0d8; max-width:420px; line-height:1.6; }
+  .key { display:inline-block; padding:2px 9px; border-radius:7px; background:rgba(120,160,255,.16); border:1px solid rgba(120,160,255,.25); font-weight:600; color:#cfe0ff; }
+  .big-score { font-size:54px; font-weight:800; color:#fff; }
+  .label { font-size:12px; letter-spacing:3px; color:#7d8fc0; text-transform:uppercase; }
+  .pulse { margin-top:8px; font-size:16px; color:#cfe0ff; font-weight:600; animation:blink 1.3s ease-in-out infinite; }
+  @keyframes blink { 0%,100%{opacity:.35} 50%{opacity:1} }
+  .best { color:#ffd86b; font-weight:700; }
+  .row { display:flex; gap:26px; margin-top:6px; }
+  .stat { display:flex; flex-direction:column; gap:2px; }
+  .new-rec { color:#ffd86b; font-weight:800; letter-spacing:2px; font-size:18px; animation:blink 1s infinite; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="c"></canvas>
+
+  <div id="startScreen" class="overlay">
+    <h1>PRISM RUSH</h1>
+    <div class="sub">
+      Move with your <b>mouse</b> (or finger). <b>Absorb</b> the glowing orbs to score.
+      <b>Dodge</b> the red shards — one hit ends your run.<br><br>
+      Your combo multiplier <b>decays fast</b> — keep collecting to keep it alive.
+      Skim hazards for <b>close-call bonuses</b>. Grab gold for <b>slow-mo</b>.<br><br>
+      Catch <b>power orbs</b> (30s each): <b style="color:#5dff8f">Magnet</b> pulls orbs in,
+      <b style="color:#bfe0ff">Invisible</b> lets red shards pass through you — but the
+      <b style="color:#ff4060">red Swarm</b> makes every hazard hunt you. Avoid that one.
+    </div>
+    <div class="pulse">Click or press SPACE to start</div>
+  </div>
+
+  <div id="gameOver" class="overlay hidden">
+    <div id="newRec" class="new-rec hidden">NEW RECORD!</div>
+    <div class="label">Score</div>
+    <div id="finalScore" class="big-score">0</div>
+    <div class="row">
+      <div class="stat"><span class="label">Best</span><span id="bestScore" class="best">0</span></div>
+      <div class="stat"><span class="label">Max Combo</span><span id="maxCombo">x1</span></div>
+      <div class="stat"><span class="label">Time</span><span id="survTime">0s</span></div>
+    </div>
+    <div class="pulse">Click or press SPACE to play again</div>
+  </div>
+</div>
+
+<script>
+(() => {
+  "use strict";
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d');
+
+  // ---- responsive sizing ----
+  let W = 0, H = 0, DPR = Math.min(window.devicePixelRatio || 1, 2);
+  function resize() {
+    const maxW = Math.min(window.innerWidth - 24, 760);
+    const maxH = Math.min(window.innerHeight - 24, 860);
+    W = maxW; H = maxH;
+    canvas.style.width = W + 'px';
+    canvas.style.height = H + 'px';
+    canvas.width = Math.floor(W * DPR);
+    canvas.height = Math.floor(H * DPR);
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  // ---- input ----
+  const mouse = { x: W/2, y: H/2, has:false };
+  function setPos(clientX, clientY) {
+    const r = canvas.getBoundingClientRect();
+    mouse.x = clientX - r.left;
+    mouse.y = clientY - r.top;
+    mouse.has = true;
+  }
+  canvas.addEventListener('mousemove', e => setPos(e.clientX, e.clientY));
+  canvas.addEventListener('touchmove', e => { const t = e.touches[0]; setPos(t.clientX, t.clientY); e.preventDefault(); }, {passive:false});
+  canvas.addEventListener('touchstart', e => { const t = e.touches[0]; setPos(t.clientX, t.clientY); }, {passive:true});
+
+  // ---- sound (Web Audio, no asset files) ----
+  const Sound = (() => {
+    let ac = null, master = null;
+    let muted = localStorage.getItem('prismRushMuted') === '1';
+    // C-major pentatonic across 3 octaves — ascending combos sound musical
+    const scale = [261.63,293.66,329.63,392.00,440.00,523.25,587.33,659.25,783.99,880.00,1046.5,1174.7,1318.5];
+    function ensure() {
+      if (!ac) {
+        const AC = window.AudioContext || window.webkitAudioContext;
+        if (!AC) return null;
+        ac = new AC();
+        master = ac.createGain();
+        master.gain.value = 0.5;
+        master.connect(ac.destination);
+      }
+      if (ac.state === 'suspended') ac.resume();
+      return ac;
+    }
+    function tone(freq, dur, type, vol, when, glideTo) {
+      const a = ensure(); if (!a || muted) return;
+      const t = a.currentTime + (when || 0);
+      const o = a.createOscillator(), g = a.createGain();
+      o.type = type || 'sine';
+      o.frequency.setValueAtTime(freq, t);
+      if (glideTo) o.frequency.exponentialRampToValueAtTime(glideTo, t + dur);
+      g.gain.setValueAtTime(0, t);
+      g.gain.linearRampToValueAtTime(vol, t + 0.006);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+      o.connect(g); g.connect(master);
+      o.start(t); o.stop(t + dur + 0.02);
+    }
+    function noise(vol, dur, cutoff) {
+      const a = ensure(); if (!a || muted) return;
+      const t = a.currentTime, n = Math.floor(a.sampleRate * dur);
+      const buf = a.createBuffer(1, n, a.sampleRate), d = buf.getChannelData(0);
+      for (let i=0;i<n;i++) d[i] = (Math.random()*2-1) * (1 - i/n);
+      const src = a.createBufferSource(); src.buffer = buf;
+      const f = a.createBiquadFilter(); f.type='lowpass'; f.frequency.value = cutoff || 1400;
+      const g = a.createGain(); g.gain.value = vol;
+      src.connect(f); f.connect(g); g.connect(master); src.start(t);
+    }
+    return {
+      unlock: ensure,
+      isMuted: () => muted,
+      toggle() { muted = !muted; localStorage.setItem('prismRushMuted', muted ? '1':'0'); if (!muted) ensure(); return muted; },
+      collect(step) {
+        const f = scale[Math.min(step, scale.length-1)];
+        tone(f, 0.13, 'sine', 0.30, 0);
+        tone(f*2, 0.09, 'triangle', 0.09, 0);
+      },
+      close() { tone(1568, 0.05, 'sine', 0.07, 0); },
+      gold() { [783.99,1046.5,1318.5].forEach((f,i)=> tone(f, 0.15, 'sine', 0.22, i*0.05)); },
+      levelup() { [523.25,659.25,783.99,1046.5,1318.5].forEach((f,i)=> tone(f, 0.20, 'triangle', 0.26, i*0.06)); },
+      death() { tone(440, 0.5, 'sawtooth', 0.30, 0, 55); noise(0.3, 0.28, 1100); },
+      power() { [659.25,880,1046.5,1318.5].forEach((f,i)=> tone(f, 0.18, 'triangle', 0.24, i*0.05)); tone(1760, 0.25, 'sine', 0.10, 0.15); },
+      bad() { tone(110, 0.6, 'sawtooth', 0.26, 0, 70); tone(116, 0.6, 'sawtooth', 0.22, 0, 73); noise(0.25, 0.5, 600); }
+    };
+  })();
+
+  // player color tiers — advance one every 50 orbs absorbed
+  const PALETTE = [
+    { core:'#aef3ff', glow:'#7af0ff' }, // cyan
+    { core:'#b6ff9e', glow:'#5dff8f' }, // green
+    { core:'#ffe89a', glow:'#ffd24a' }, // gold
+    { core:'#ffb0e6', glow:'#ff5ed0' }, // pink
+    { core:'#c7b3ff', glow:'#9b6bff' }, // purple
+    { core:'#ffc09a', glow:'#ff7a3a' }, // orange
+    { core:'#9adcff', glow:'#3aa0ff' }  // blue
+  ];
+
+  // ---- game state ----
+  const STATE = { MENU:0, PLAY:1, DEAD:2 };
+  let state = STATE.MENU;
+  let player, orbs, particles, stars, score, combo, comboTimer, maxCombo,
+      spawnT, hazardChance, elapsed, slowmo, shake, best, deathT, ringPulse,
+      eaten, speedLevel, flashMsg, flashT, abilities;
+
+  const ABILITY_TIME = 30; // seconds each ability lasts
+
+  best = +(localStorage.getItem('prismRushBest') || 0);
+
+  function rand(a, b) { return a + Math.random() * (b - a); }
+  function dist2(ax, ay, bx, by) { const dx=ax-bx, dy=ay-by; return dx*dx+dy*dy; }
+
+  function initStars() {
+    stars = [];
+    for (let i=0;i<70;i++) stars.push({ x:rand(0,W), y:rand(0,H), z:rand(.2,1), s:rand(.4,1.6) });
+  }
+
+  function reset() {
+    player = { x:W/2, y:H/2, r:13, trail:[] };
+    orbs = [];
+    particles = [];
+    score = 0; combo = 1; comboTimer = 0; maxCombo = 1;
+    spawnT = 0; hazardChance = 0.18; elapsed = 0;
+    slowmo = 0; shake = 0; ringPulse = 0;
+    eaten = 0; speedLevel = 0; flashMsg = ''; flashT = 0;
+    abilities = { magnet:0, ghost:0, swarm:0 };
+    initStars();
+  }
+
+  function spawnOrb() {
+    // spawn just outside an edge, drift across
+    const edge = Math.floor(rand(0,4));
+    let x, y;
+    if (edge===0){ x=rand(0,W); y=-30; }
+    else if (edge===1){ x=W+30; y=rand(0,H); }
+    else if (edge===2){ x=rand(0,W); y=H+30; }
+    else { x=-30; y=rand(0,H); }
+    const tx = rand(W*.2, W*.8), ty = rand(H*.2, H*.8);
+    const ang = Math.atan2(ty-y, tx-x);
+    const baseSpeed = 1.0 + elapsed*0.018;
+    const speed = rand(baseSpeed, baseSpeed*1.7);
+
+    const roll = Math.random();
+    let type = 'good', power = null;
+    if (roll < hazardChance) type = 'hazard';
+    else {
+      const r2 = Math.random();
+      if (r2 < 0.022) { type = 'power'; power = ['magnet','ghost','swarm'][Math.floor(Math.random()*3)]; }
+      else if (r2 < 0.057) type = 'gold';
+    }
+
+    const r = type==='hazard' ? rand(9,15)
+            : type==='power'  ? 17
+            : type==='gold'   ? 12
+            : rand(7,11);
+
+    orbs.push({
+      x, y,
+      vx: Math.cos(ang)*speed, vy: Math.sin(ang)*speed,
+      r, type, power, life:0, scored:false, near:false,
+      spin: rand(0, Math.PI*2)
+    });
+  }
+
+  function burst(x, y, color, n, spd) {
+    for (let i=0;i<n;i++){
+      const a = rand(0, Math.PI*2), s = rand(spd*.3, spd);
+      particles.push({ x, y, vx:Math.cos(a)*s, vy:Math.sin(a)*s, r:rand(1.5,3.5), life:1, color });
+    }
+  }
+
+  function addScore(n) {
+    score += Math.round(n * combo);
+  }
+
+  function bumpCombo() {
+    combo++; comboTimer = 1; // full combo bar
+    if (combo > maxCombo) maxCombo = combo;
+  }
+
+  // called when an orb is absorbed; every 50 -> new color + 1 speed
+  function eat() {
+    eaten++;
+    if (eaten % 50 === 0) {
+      speedLevel++;
+      flashMsg = 'SPEED +1  ·  LV ' + (speedLevel+1);
+      flashT = 1;
+      shake = Math.min(1, shake + 0.6);
+      const pal = PALETTE[speedLevel % PALETTE.length];
+      burst(player.x, player.y, pal.glow, 36, 7);
+      burst(player.x, player.y, '#ffffff', 16, 5);
+      Sound.levelup();
+    }
+  }
+
+  function activateAbility(kind) {
+    abilities[kind] = ABILITY_TIME;
+    flashT = 1;
+    if (kind === 'magnet') {
+      flashMsg = 'MAGNET  ·  30s';
+      burst(player.x, player.y, '#5dff8f', 30, 6); Sound.power();
+    } else if (kind === 'ghost') {
+      flashMsg = 'INVISIBLE  ·  30s';
+      burst(player.x, player.y, '#bfe0ff', 30, 6); Sound.power();
+    } else if (kind === 'swarm') {
+      flashMsg = '⚠ SWARM  ·  30s';
+      burst(player.x, player.y, '#ff2a4d', 36, 7); Sound.bad();
+      shake = Math.min(1, shake + 0.7);
+    }
+  }
+
+  // ---- main loop ----
+  let last = performance.now();
+  function frame(now) {
+    let dt = Math.min((now - last)/16.667, 2.2); // normalized to ~60fps units
+    last = now;
+    if (slowmo > 0) { dt *= 0.42; slowmo -= (now - last < 0 ? 0 : 0); }
+    update(dt, now);
+    render(now);
+    requestAnimationFrame(frame);
+  }
+
+  function update(dt, now) {
+    // slow-mo timer (real-time)
+    if (slowmo > 0) slowmo = Math.max(0, slowmo - 1*dt);
+
+    // stars drift
+    for (const s of stars) {
+      s.y += s.z * 0.25 * dt;
+      if (s.y > H) { s.y = 0; s.x = rand(0,W); }
+    }
+
+    // particles
+    for (let i=particles.length-1;i>=0;i--){
+      const p = particles[i];
+      p.x += p.vx*dt; p.y += p.vy*dt;
+      p.vx *= 0.94; p.vy *= 0.94;
+      p.life -= 0.025*dt;
+      if (p.life <= 0) particles.splice(i,1);
+    }
+
+    if (shake > 0) shake = Math.max(0, shake - 0.06*dt);
+    if (ringPulse > 0) ringPulse = Math.max(0, ringPulse - 0.05*dt);
+    if (flashT > 0) flashT = Math.max(0, flashT - 0.014*dt);
+
+    if (state !== STATE.PLAY) return;
+
+    elapsed += dt/60;
+
+    // ability countdowns (real seconds)
+    for (const k in abilities) if (abilities[k] > 0) abilities[k] = Math.max(0, abilities[k] - dt/60);
+
+    // difficulty ramp
+    hazardChance = Math.min(0.42, 0.18 + elapsed*0.006);
+    const spawnRate = Math.max(7, 26 - elapsed*0.7); // frames between spawns (lower = faster)
+    spawnT -= dt;
+    if (spawnT <= 0) { spawnOrb(); spawnT = spawnRate * rand(.7,1.3); }
+
+    // combo decay
+    comboTimer -= dt * (0.011 + elapsed*0.0002);
+    if (comboTimer <= 0) {
+      if (combo > 1) combo = Math.max(1, combo - 1), comboTimer = 0.55;
+      else comboTimer = 0;
+    }
+
+    // player follows mouse smoothly — responsiveness grows +1 "speed" per level
+    const tx = mouse.has ? mouse.x : W/2;
+    const ty = mouse.has ? mouse.y : H/2;
+    const follow = Math.min(0.85, 0.26 + speedLevel * 0.06);
+    player.x += (tx - player.x) * Math.min(1, follow*dt);
+    player.y += (ty - player.y) * Math.min(1, follow*dt);
+    player.x = Math.max(player.r, Math.min(W-player.r, player.x));
+    player.y = Math.max(player.r, Math.min(H-player.r, player.y));
+    player.trail.push({x:player.x, y:player.y});
+    if (player.trail.length > 14) player.trail.shift();
+
+    // orbs
+    const pr = player.r;
+    for (let i=orbs.length-1;i>=0;i--){
+      const o = orbs[i];
+
+      // MAGNET: suck score orbs toward the player
+      if (abilities.magnet > 0 && (o.type==='good' || o.type==='gold')) {
+        const dx=player.x-o.x, dy=player.y-o.y, d=Math.hypot(dx,dy)||1;
+        o.vx += (dx/d)*0.85*dt; o.vy += (dy/d)*0.85*dt;
+        const sp=Math.hypot(o.vx,o.vy); if (sp>9){ o.vx=o.vx/sp*9; o.vy=o.vy/sp*9; }
+      }
+      // SWARM (curse): red hazards slowly home in on the player
+      if (abilities.swarm > 0 && o.type==='hazard') {
+        const dx=player.x-o.x, dy=player.y-o.y, d=Math.hypot(dx,dy)||1;
+        o.vx += (dx/d)*0.10*dt; o.vy += (dy/d)*0.10*dt;
+        const sp=Math.hypot(o.vx,o.vy); if (sp>3.2){ o.vx=o.vx/sp*3.2; o.vy=o.vy/sp*3.2; }
+      }
+
+      o.x += o.vx*dt; o.y += o.vy*dt; o.life += dt; o.spin += 0.04*dt;
+
+      // remove if drifted far off
+      if (o.x < -60 || o.x > W+60 || o.y < -60 || o.y > H+60) {
+        if (o.life > 30) { orbs.splice(i,1); continue; }
+      }
+
+      const d2 = dist2(o.x,o.y,player.x,player.y);
+      const collideR = pr + o.r;
+
+      // close-call detection (for non-hazard skimming of hazards)
+      if (o.type==='hazard' && !o.near) {
+        if (d2 < (collideR+26)*(collideR+26) && d2 > collideR*collideR) {
+          o.near = true;
+          addScore(15);
+          combo += 0; // close calls don't break combo, give bonus
+          burst(player.x, player.y, '#7af0ff', 6, 3);
+          ringPulse = 0.7;
+          Sound.close();
+        }
+      }
+
+      if (d2 < collideR*collideR) {
+        if (o.type==='hazard') {
+          if (abilities.ghost > 0) {
+            // INVISIBLE: phase through harmlessly + spark feedback
+            burst(o.x, o.y, '#bfe0ff', 4, 3);
+          } else {
+            die(now);
+            return;
+          }
+        } else if (o.type==='power') {
+          activateAbility(o.power);
+          burst(o.x, o.y, o.power==='swarm' ? '#ff2a4d' : '#ffffff', 18, 5);
+          orbs.splice(i,1);
+        } else if (o.type==='gold') {
+          slowmo = 70; // ~ a bit over a second of slow-mo
+          addScore(60); bumpCombo();
+          burst(o.x,o.y,'#ffd86b',26,6);
+          shake = Math.min(1, shake+0.5);
+          Sound.gold();
+          eat();
+          orbs.splice(i,1);
+        } else {
+          addScore(10); bumpCombo();
+          burst(o.x,o.y,'#7ad1ff',12,4.5);
+          shake = Math.min(1, shake+0.15);
+          ringPulse = Math.max(ringPulse, 0.5);
+          Sound.collect(combo - 1);
+          eat();
+          orbs.splice(i,1);
+        }
+      }
+    }
+  }
+
+  function die(now) {
+    state = STATE.DEAD;
+    deathT = now;
+    shake = 1;
+    Sound.death();
+    burst(player.x, player.y, '#ff5a7a', 50, 8);
+    burst(player.x, player.y, '#fff', 24, 5);
+    const isRec = score > best;
+    if (isRec) { best = score; localStorage.setItem('prismRushBest', best); }
+    document.getElementById('finalScore').textContent = score.toLocaleString();
+    document.getElementById('bestScore').textContent = best.toLocaleString();
+    document.getElementById('maxCombo').textContent = 'x'+maxCombo;
+    document.getElementById('survTime').textContent = elapsed.toFixed(1)+'s';
+    document.getElementById('newRec').classList.toggle('hidden', !isRec);
+    // brief delay before showing overlay so the death burst is visible
+    setTimeout(() => { if (state===STATE.DEAD) document.getElementById('gameOver').classList.remove('hidden'); }, 650);
+  }
+
+  // ---- rendering ----
+  function render(now) {
+    let ox=0, oy=0;
+    if (shake>0){ const m=shake*9; ox=rand(-m,m); oy=rand(-m,m); }
+    ctx.save();
+    ctx.clearRect(0,0,W,H);
+    ctx.translate(ox,oy);
+
+    // stars
+    for (const s of stars) {
+      ctx.globalAlpha = s.z*0.7;
+      ctx.fillStyle = '#9fc0ff';
+      ctx.beginPath(); ctx.arc(s.x,s.y,s.s,0,7); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+
+    // slow-mo tint
+    if (slowmo>0){
+      ctx.fillStyle = 'rgba(120,90,255,'+(Math.min(slowmo,40)/40*0.12)+')';
+      ctx.fillRect(-ox,-oy,W,H);
+    }
+
+    // orbs
+    for (const o of orbs) {
+      if (o.type==='hazard') {
+        ctx.save();
+        ctx.translate(o.x,o.y); ctx.rotate(o.spin);
+        ctx.shadowColor='#ff3a5e'; ctx.shadowBlur=18;
+        ctx.fillStyle='#ff3a5e';
+        ctx.beginPath();
+        for(let k=0;k<3;k++){ const a=o.spin+k*2.094; ctx.lineTo(Math.cos(a)*o.r*1.5, Math.sin(a)*o.r*1.5); }
+        ctx.closePath(); ctx.fill();
+        ctx.fillStyle='#ff8aa0'; ctx.beginPath(); ctx.arc(0,0,o.r*.45,0,7); ctx.fill();
+        ctx.restore();
+      } else if (o.type==='power') {
+        const glow = o.power==='magnet' ? '#5dff8f' : o.power==='ghost' ? '#bfe0ff' : '#ff2a4d';
+        const pulse = 1 + Math.sin(o.life*0.16)*0.10;
+        ctx.save();
+        ctx.translate(o.x,o.y); ctx.scale(pulse,pulse);
+        // glowing capsule base
+        ctx.shadowColor=glow; ctx.shadowBlur=24;
+        ctx.fillStyle='rgba(10,14,30,.85)';
+        ctx.beginPath(); ctx.arc(0,0,o.r,0,7); ctx.fill();
+        ctx.lineWidth=2.5; ctx.strokeStyle=glow; ctx.stroke();
+        ctx.shadowBlur=0;
+        if (o.power==='magnet') {
+          // horseshoe magnet
+          ctx.lineWidth=o.r*0.42; ctx.lineCap='butt'; ctx.strokeStyle='#ff5252';
+          ctx.beginPath(); ctx.arc(0,-o.r*0.08,o.r*0.5,Math.PI,0); ctx.stroke();
+          ctx.beginPath();
+          ctx.moveTo(-o.r*0.5,-o.r*0.08); ctx.lineTo(-o.r*0.5,o.r*0.45);
+          ctx.moveTo( o.r*0.5,-o.r*0.08); ctx.lineTo( o.r*0.5,o.r*0.45);
+          ctx.stroke();
+          ctx.strokeStyle='#e6ecff';
+          ctx.beginPath();
+          ctx.moveTo(-o.r*0.5,o.r*0.28); ctx.lineTo(-o.r*0.5,o.r*0.5);
+          ctx.moveTo( o.r*0.5,o.r*0.28); ctx.lineTo( o.r*0.5,o.r*0.5);
+          ctx.stroke();
+        } else if (o.power==='ghost') {
+          // little ghost
+          ctx.fillStyle='#eef4ff';
+          ctx.beginPath(); ctx.arc(0,-o.r*0.12,o.r*0.55,Math.PI,0);
+          ctx.lineTo(o.r*0.55,o.r*0.42);
+          ctx.lineTo(o.r*0.28,o.r*0.2); ctx.lineTo(0,o.r*0.42);
+          ctx.lineTo(-o.r*0.28,o.r*0.2); ctx.lineTo(-o.r*0.55,o.r*0.42);
+          ctx.closePath(); ctx.fill();
+          ctx.fillStyle='#3a4a7a';
+          ctx.beginPath(); ctx.arc(-o.r*0.2,-o.r*0.12,o.r*0.11,0,7); ctx.arc(o.r*0.2,-o.r*0.12,o.r*0.11,0,7); ctx.fill();
+        } else {
+          // swarm: spiky menace
+          ctx.rotate(o.spin);
+          ctx.fillStyle='#c01430';
+          ctx.beginPath();
+          for (let k=0;k<16;k++){ const rr=k%2?o.r*0.42:o.r*0.82, a=k*Math.PI/8; ctx.lineTo(Math.cos(a)*rr,Math.sin(a)*rr); }
+          ctx.closePath(); ctx.fill();
+          ctx.fillStyle='#2a0008'; ctx.beginPath(); ctx.arc(0,0,o.r*0.3,0,7); ctx.fill();
+        }
+        ctx.restore();
+      } else {
+        const col = o.type==='gold' ? '#ffd86b' : '#6fd6ff';
+        const glow = o.type==='gold' ? '#ffb800' : '#39a9ff';
+        const pulse = 1 + Math.sin(o.life*0.18)*0.12;
+        ctx.shadowColor=glow; ctx.shadowBlur= o.type==='gold'?26:14;
+        ctx.fillStyle=col;
+        ctx.beginPath(); ctx.arc(o.x,o.y,o.r*pulse,0,7); ctx.fill();
+        ctx.shadowBlur=0; ctx.fillStyle='rgba(255,255,255,.85)';
+        ctx.beginPath(); ctx.arc(o.x-o.r*.3,o.y-o.r*.3,o.r*.32,0,7); ctx.fill();
+      }
+    }
+    ctx.shadowBlur=0;
+
+    // particles
+    for (const p of particles) {
+      ctx.globalAlpha = Math.max(0,p.life);
+      ctx.fillStyle = p.color;
+      ctx.beginPath(); ctx.arc(p.x,p.y,p.r,0,7); ctx.fill();
+    }
+    ctx.globalAlpha=1;
+
+    // player
+    if (state===STATE.PLAY || state===STATE.MENU) {
+      const pal = PALETTE[speedLevel % PALETTE.length];
+      const hot = combo>4;
+      // trail
+      for (let i=0;i<player.trail.length;i++){
+        const t=player.trail[i]; const a=i/player.trail.length;
+        ctx.globalAlpha=a*0.5;
+        ctx.fillStyle = pal.glow;
+        ctx.beginPath(); ctx.arc(t.x,t.y,player.r*a*0.9,0,7); ctx.fill();
+      }
+      ctx.globalAlpha=1;
+      // MAGNET field: pulsing dashed ring around player
+      if (abilities.magnet>0){
+        ctx.save();
+        ctx.globalAlpha=0.5+0.3*Math.sin(now*0.012);
+        ctx.strokeStyle='#5dff8f'; ctx.lineWidth=2; ctx.setLineDash([6,8]);
+        ctx.beginPath(); ctx.arc(player.x,player.y,player.r+22+4*Math.sin(now*0.008),0,7); ctx.stroke();
+        ctx.restore();
+      }
+      // glow ring on collect
+      if (ringPulse>0){
+        ctx.globalAlpha=ringPulse;
+        ctx.strokeStyle=pal.glow; ctx.lineWidth=2.5;
+        ctx.beginPath(); ctx.arc(player.x,player.y,player.r+ (1-ringPulse)*40,0,7); ctx.stroke();
+        ctx.globalAlpha=1;
+      }
+      // INVISIBLE: render translucent + flickering
+      const ghosting = abilities.ghost>0;
+      ctx.globalAlpha = ghosting ? 0.30+0.18*Math.sin(now*0.03) : 1;
+      ctx.shadowColor = ghosting ? '#bfe0ff' : pal.glow; ctx.shadowBlur = hot ? 30 : 22;
+      ctx.fillStyle = ghosting ? '#dff0ff' : pal.core;
+      ctx.beginPath(); ctx.arc(player.x,player.y,player.r,0,7); ctx.fill();
+      ctx.shadowBlur=0; ctx.fillStyle='#fff';
+      ctx.beginPath(); ctx.arc(player.x,player.y,player.r*.45,0,7); ctx.fill();
+      ctx.globalAlpha=1;
+    }
+
+    ctx.restore();
+
+    // ---- HUD ----
+    if (state===STATE.PLAY) {
+      ctx.fillStyle='#eaf2ff';
+      ctx.font='800 30px -apple-system, system-ui, sans-serif';
+      ctx.textAlign='left'; ctx.textBaseline='top';
+      ctx.fillText(score.toLocaleString(), 18, 16);
+
+      ctx.font='600 13px system-ui'; ctx.fillStyle='#7d8fc0';
+      ctx.fillText('BEST ' + best.toLocaleString(), 18, 50);
+
+      // speed level + progress to next color (every 50 orbs)
+      const pal = PALETTE[speedLevel % PALETTE.length];
+      ctx.font='700 13px system-ui'; ctx.fillStyle=pal.glow;
+      ctx.fillText('SPEED x'+(1+speedLevel)+'   '+(eaten%50)+'/50', 18, 70);
+
+      // active ability timers
+      let ay = 92;
+      const chip = (label, secs, col) => {
+        ctx.textAlign='left';
+        ctx.font='800 14px system-ui'; ctx.fillStyle=col;
+        ctx.shadowColor=col; ctx.shadowBlur=10;
+        ctx.fillText(label + '  ' + Math.ceil(secs) + 's', 18, ay);
+        ctx.shadowBlur=0; ay += 22;
+      };
+      if (abilities.magnet>0) chip('MAGNET',    abilities.magnet, '#5dff8f');
+      if (abilities.ghost >0) chip('INVISIBLE', abilities.ghost,  '#bfe0ff');
+      if (abilities.swarm >0) chip('⚠ SWARM',   abilities.swarm,  '#ff4060');
+
+      // combo
+      ctx.textAlign='right';
+      const cCol = combo>=8?'#ff7ad9':combo>=4?'#ffd86b':'#7af0ff';
+      ctx.fillStyle=cCol; ctx.font='800 30px system-ui';
+      ctx.fillText('x'+combo, W-18, 16);
+      // combo bar
+      const bw=120, bx=W-18-bw, by=54;
+      ctx.fillStyle='rgba(255,255,255,.12)'; ctx.fillRect(bx,by,bw,6);
+      ctx.fillStyle=cCol; ctx.fillRect(bx,by,bw*Math.max(0,Math.min(1,comboTimer)),6);
+
+      // mute indicator
+      ctx.textAlign='right'; ctx.font='600 12px system-ui'; ctx.fillStyle='#5b6a96';
+      ctx.fillText(Sound.isMuted() ? 'MUTED (M)' : '♪ (M)', W-18, 70);
+
+      // level-up flash banner
+      if (flashT > 0) {
+        ctx.save();
+        ctx.globalAlpha = Math.min(1, flashT*1.6);
+        ctx.textAlign='center'; ctx.textBaseline='middle';
+        ctx.fillStyle = pal.glow;
+        ctx.shadowColor = pal.glow; ctx.shadowBlur = 24;
+        ctx.font = '800 ' + (34 + (1-flashT)*10) + 'px system-ui';
+        ctx.fillText(flashMsg, W/2, H*0.30);
+        ctx.restore();
+      }
+    }
+  }
+
+  // ---- flow control ----
+  function start() {
+    document.getElementById('startScreen').classList.add('hidden');
+    document.getElementById('gameOver').classList.add('hidden');
+    reset();
+    state = STATE.PLAY;
+    last = performance.now();
+  }
+
+  function action() {
+    Sound.unlock(); // browsers require audio to start from a user gesture
+    if (state===STATE.MENU) start();
+    else if (state===STATE.DEAD) {
+      // require overlay visible (avoid instant restart during death anim)
+      if (!document.getElementById('gameOver').classList.contains('hidden')) start();
+    }
+  }
+
+  canvas.addEventListener('mousedown', action);
+  document.getElementById('startScreen').addEventListener('mousedown', action);
+  document.getElementById('gameOver').addEventListener('mousedown', action);
+  canvas.addEventListener('touchstart', () => { if(state!==STATE.PLAY) action(); }, {passive:true});
+  document.querySelectorAll('.overlay').forEach(o => o.addEventListener('touchstart', e=>{ action(); }, {passive:true}));
+  window.addEventListener('keydown', e => {
+    if (e.code==='Space') { e.preventDefault(); action(); }
+    else if (e.code==='KeyM') { Sound.toggle(); }
+  });
+
+  reset(); // initialize state so the menu background animates and the loop survives frame 1
+  requestAnimationFrame(frame);
+})();
+</script>
+<script>if('serviceWorker' in navigator){window.addEventListener('load',()=>navigator.serviceWorker.register('sw.js').catch(()=>{}));}</script>
+</body>
+</html>
