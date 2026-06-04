@@ -235,12 +235,13 @@
   function curDim() { return DIMENSIONS[dimension % DIMENSIONS.length]; }
 
   // ---- game state ----
-  const STATE = { MENU:0, PLAY:1, DEAD:2 };
+  const STATE = { MENU:0, PLAY:1, DEAD:2, CUTSCENE:3 };
+  const CUT_DUR = 5; // seconds — the alien wormhole cutaway
   let state = STATE.MENU;
   let player, orbs, particles, stars, score, combo, comboTimer, maxCombo,
       spawnT, hazardChance, elapsed, slowmo, shake, best, deathT, ringPulse,
       eaten, speedLevel, flashMsg, flashT, abilities, pops, frenzy, hueShift,
-      dimension, shield, slowPulseT, beams, beamT, lives;
+      dimension, shield, slowPulseT, beams, beamT, lives, cutT, cutTo;
 
   const ABILITY_TIME = 30; // seconds each ability lasts
 
@@ -267,6 +268,7 @@
     dimension = 0; shield = 0; slowPulseT = 0;
     beams = []; beamT = 60;
     lives = 0;
+    cutT = 0; cutTo = null;
     initStars();
   }
 
@@ -457,6 +459,24 @@
     buzz([0,70,40,90]);
   }
 
+  // ---- alien wormhole cutaway ----
+  function startCutscene() {
+    state = STATE.CUTSCENE;
+    cutT = 0;
+    slowmo = 0; // run the scene at normal speed so it lasts a true 5s
+    cutTo = DIMENSIONS[(dimension + 1) % DIMENSIONS.length]; // destination planet theme
+    Sound.power(); Sound.levelup();
+    buzz([0,40,30,60]);
+  }
+
+  function endCutscene() {
+    warpDimension();                       // apply the actual jump (re-theme + safety shield)
+    flashMsg = '🛸 +1 LIFE  ·  WELCOME TO ' + curDim().name;
+    flashT = 1.6;
+    drag.tx = player.x; drag.ty = player.y; // don't fling the orb on resume
+    state = STATE.PLAY;
+  }
+
   function activateAbility(kind) {
     abilities[kind] = ABILITY_TIME;
     flashT = 1;
@@ -515,6 +535,13 @@
     if (shake > 0) shake = Math.max(0, shake - 0.06*dt);
     if (ringPulse > 0) ringPulse = Math.max(0, ringPulse - 0.05*dt);
     if (flashT > 0) flashT = Math.max(0, flashT - 0.014*dt);
+
+    // wormhole cutaway: advance its timer, then resume play in the new dimension
+    if (state === STATE.CUTSCENE) {
+      cutT += dt/60;
+      if (cutT >= CUT_DUR) endCutscene();
+      return;
+    }
 
     if (state !== STATE.PLAY) return;
 
@@ -670,16 +697,13 @@
             return;
           }
         } else if (o.type==='ufo') {
-          // ALIEN RESCUE SHIP: banks an extra life and warps you through a wormhole
-          lives = Math.min(5, lives + 1);
+          // ALIEN RESCUE SHIP: banks a life, then plays the wormhole cutaway
+          lives = Math.min(3, lives + 1);
           burst(o.x, o.y, '#5dff8f', 30, 7);
           burst(o.x, o.y, '#ffffff', 16, 5);
-          popText(o.x, o.y, '+1 LIFE', '#5dff8f', true);
-          Sound.power(); buzz([0,40,30,60]);
           orbs.splice(i,1);
-          warpDimension();
-          flashMsg = '🛸 ABDUCTED!  +1 LIFE · WORMHOLE JUMP';
-          flashT = 1.6;
+          startCutscene();
+          return; // freeze gameplay; the cutscene takes over
         } else if (o.type==='power') {
           activateAbility(o.power);
           burst(o.x, o.y, o.power==='swarm' ? '#ff2a4d' : '#ffffff', 18, 5);
@@ -825,7 +849,161 @@
     ctx.restore();
   }
 
+  // a little flying saucer with a green alien pilot (used in the cutaway)
+  function drawSaucer(now, x, y, s) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.scale(s, s);
+    const glow = '#5dff8f', r = 18;
+    // glass dome
+    ctx.shadowColor = glow; ctx.shadowBlur = 20;
+    ctx.fillStyle = 'rgba(190,255,215,0.9)';
+    ctx.beginPath(); ctx.arc(0, -r*0.15, r*0.62, Math.PI, 0); ctx.fill();
+    ctx.shadowBlur = 0;
+    // little green alien with big black eyes
+    ctx.fillStyle = '#56e07a';
+    ctx.beginPath(); ctx.arc(0, -r*0.28, r*0.34, 0, 7); ctx.fill();
+    ctx.fillStyle = '#0a2a14';
+    ctx.beginPath();
+    ctx.ellipse(-r*0.14, -r*0.30, r*0.09, r*0.15, 0.4, 0, 7);
+    ctx.ellipse( r*0.14, -r*0.30, r*0.09, r*0.15,-0.4, 0, 7);
+    ctx.fill();
+    // saucer body
+    ctx.shadowColor = glow; ctx.shadowBlur = 18;
+    ctx.fillStyle = '#d7ecff';
+    ctx.beginPath(); ctx.ellipse(0, r*0.05, r*1.3, r*0.5, 0, 0, 7); ctx.fill();
+    ctx.shadowBlur = 0;
+    // blinking running lights
+    for (let k=-2;k<=2;k++){
+      ctx.fillStyle = (Math.floor(now*0.01)+k) % 2 ? '#ffd24a' : '#ff5ed0';
+      ctx.beginPath(); ctx.arc(k*r*0.42, r*0.22, r*0.1, 0, 7); ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  // swirling wormhole portal
+  function drawWormhole(now, x, y, r, intensity) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.shadowColor = '#8a5dff'; ctx.shadowBlur = 30*intensity;
+    for (let k=0;k<4;k++){
+      ctx.globalAlpha = 0.15 + 0.18*intensity;
+      ctx.strokeStyle = k%2 ? '#b59cff' : '#7af0ff';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      for (let a=0; a<7; a+=0.12){
+        const rr = r*0.12 + a*(r/7.5);
+        const ang = a*1.6 + now*0.004*(k+1) + k*1.6;
+        const px = Math.cos(ang)*rr, py = Math.sin(ang)*rr;
+        a===0 ? ctx.moveTo(px,py) : ctx.lineTo(px,py);
+      }
+      ctx.stroke();
+    }
+    ctx.shadowBlur = 0; ctx.globalAlpha = 1;
+    const cg = ctx.createRadialGradient(0,0,0,0,0,r*0.5);
+    cg.addColorStop(0, 'rgba(255,255,255,'+(0.6*intensity)+')');
+    cg.addColorStop(0.5, 'rgba(150,110,255,'+(0.4*intensity)+')');
+    cg.addColorStop(1, 'rgba(10,5,30,0)');
+    ctx.fillStyle = cg;
+    ctx.beginPath(); ctx.arc(0,0,r*0.5,0,7); ctx.fill();
+    ctx.restore();
+  }
+
+  // the ~5s alien wormhole cutaway scene
+  function renderCutscene(now) {
+    const T = cutT;
+    const cx = W/2, cy = H/2;
+    const ease = t => t<0 ? 0 : t>1 ? 1 : (t<.5 ? 2*t*t : 1 - Math.pow(-2*t+2,2)/2);
+    ctx.save();
+
+    // deep space backdrop
+    const bgGrad = ctx.createLinearGradient(0,0,0,H);
+    bgGrad.addColorStop(0,'#02030a'); bgGrad.addColorStop(1,'#06031a');
+    ctx.fillStyle = bgGrad; ctx.fillRect(0,0,W,H);
+
+    // streaking stars — faster while travelling / warping
+    const warpHot = (T>=3.0 && T<4.0);
+    const traveling = (T>1.2 && T<4.2);
+    const streak = warpHot ? 64 : traveling ? 26 : 6;
+    ctx.strokeStyle = 'rgba(180,210,255,0.8)';
+    for (let k=0;k<90;k++){
+      const sx = ((k*97 + now*streak*0.06) % (W+120)) - 60;
+      const sy = (k*53) % H;
+      const len = 2 + streak*0.55;
+      ctx.globalAlpha = 0.25 + (k%5)*0.12;
+      ctx.lineWidth = (k%3)?1:1.6;
+      ctx.beginPath(); ctx.moveTo(W-sx, sy); ctx.lineTo(W-sx+len, sy); ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+
+    const wx = W*0.5, wy = H*0.42;
+    let caption = '';
+
+    if (T < 1.2) {
+      // ABDUCTION — tractor beam lifts your orb into the saucer
+      const p = ease(T/1.2);
+      const saucerY = H*0.40;
+      ctx.globalAlpha = 0.22 + 0.1*Math.sin(now*0.02);
+      ctx.fillStyle = '#5dff8f';
+      ctx.beginPath();
+      ctx.moveTo(cx-18, saucerY+10); ctx.lineTo(cx+18, saucerY+10);
+      ctx.lineTo(cx+70, H*0.86); ctx.lineTo(cx-70, H*0.86);
+      ctx.closePath(); ctx.fill();
+      ctx.globalAlpha = 1;
+      const orbY = H*0.84 - p*(H*0.84 - (saucerY+18));
+      ctx.shadowColor = '#7af0ff'; ctx.shadowBlur = 24;
+      ctx.fillStyle = '#bffaff';
+      ctx.beginPath(); ctx.arc(cx, orbY, 11*(1-0.35*p), 0, 7); ctx.fill();
+      ctx.shadowBlur = 0;
+      drawSaucer(now, cx, saucerY, 1.8);
+      caption = 'A little green friend scooped you up...';
+    } else if (T < 3.0) {
+      // TRAVEL — race toward the wormhole
+      const p = ease((T-1.2)/1.8);
+      const sx = cx + (wx-cx)*p;
+      const sy = H*0.40 + (wy-H*0.40)*p + Math.sin(now*0.006)*8;
+      drawWormhole(now, wx, wy, 60 + 90*p, 0.5);
+      drawSaucer(now, sx, sy, 1.8 - 0.6*p);
+      caption = 'Punching it toward the wormhole!';
+    } else if (T < 4.0) {
+      // THROUGH — the portal swallows the screen
+      const p = ease((T-3.0)/1.0);
+      drawWormhole(now, wx, wy, 150 + 340*p, 0.5 + 0.5*p);
+      drawSaucer(now, wx, wy, Math.max(0.05, 0.9 - p));
+      if (T > 3.7) { ctx.globalAlpha = (T-3.7)/0.3; ctx.fillStyle='#fff'; ctx.fillRect(0,0,W,H); ctx.globalAlpha = 1; }
+      caption = 'WARP!';
+    } else {
+      // ARRIVAL — a new planet rises and the saucer drops you off
+      const p = ease((T-4.0)/1.0);
+      const dest = cutTo || curDim();
+      if (p < 0.25) { ctx.globalAlpha = 1 - p/0.25; ctx.fillStyle='#fff'; ctx.fillRect(0,0,W,H); ctx.globalAlpha = 1; }
+      const pr = 200, py = H + pr - p*(pr*0.95);
+      const pg = ctx.createRadialGradient(cx-50, py-60, 20, cx, py, pr);
+      pg.addColorStop(0, dest.star); pg.addColorStop(1, dest.bg);
+      ctx.fillStyle = pg;
+      ctx.beginPath(); ctx.arc(cx, py, pr, 0, 7); ctx.fill();
+      ctx.globalAlpha = 0.4; ctx.strokeStyle = dest.star; ctx.lineWidth = 6;
+      ctx.beginPath(); ctx.arc(cx, py, pr+5, 0, 7); ctx.stroke();
+      ctx.globalAlpha = 1;
+      drawSaucer(now, cx, -40 + p*(py - pr + 10), 1.2);
+      caption = 'Touching down on ' + dest.name;
+    }
+
+    // captions + life banner
+    ctx.textAlign = 'center';
+    ctx.shadowColor = '#000'; ctx.shadowBlur = 8;
+    ctx.fillStyle = '#eaf2ff'; ctx.font = '800 22px system-ui';
+    ctx.fillText(caption, cx, H*0.12);
+    ctx.fillStyle = '#5dff8f'; ctx.font = '800 16px system-ui';
+    ctx.fillText('🛸 EXTRA LIFE BANKED  ·  ' + lives + '/3', cx, H*0.12 + 30);
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = 'rgba(220,230,255,0.5)'; ctx.font = '600 12px system-ui';
+    ctx.fillText('tap to skip', cx, H*0.94);
+    ctx.restore();
+  }
+
   function render(now) {
+    if (state === STATE.CUTSCENE) { renderCutscene(now); return; }
     let ox=0, oy=0;
     if (shake>0){ const m=shake*9; ox=rand(-m,m); oy=rand(-m,m); }
     ctx.save();
@@ -1192,6 +1370,7 @@
   function action() {
     Sound.unlock(); // browsers require audio to start from a user gesture
     if (state===STATE.MENU) start();
+    else if (state===STATE.CUTSCENE) { if (cutT>0.6) endCutscene(); } // tap to skip (after brief lock-in)
     else if (state===STATE.DEAD) {
       // require overlay visible (avoid instant restart during death anim)
       if (!document.getElementById('gameOver').classList.contains('hidden')) start();
