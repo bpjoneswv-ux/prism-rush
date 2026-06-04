@@ -69,7 +69,10 @@
       <b style="color:#bfe0ff">Invisible</b> lets red shards pass through you — but the
       <b style="color:#ff4060">red Swarm</b> makes every hazard hunt you. Avoid that one.<br><br>
       Every <b>25 orbs</b> you <b style="color:#b59cff">warp to a new dimension</b> — the world re-themes and the
-      <b>physics change</b>: floaty zero-G drift, heavy magnetic pull, hyperspeed, fiery turbulence, a gravity well, and more.
+      <b>physics change</b>: floaty zero-G drift, heavy magnetic pull, hyperspeed, fiery turbulence, a gravity well, and more.<br><br>
+      Catch a rare <b style="color:#5dff8f">🛸 alien rescue ship</b> — it abducts you through a wormhole to a new
+      dimension and banks an <b style="color:#5dff8f">extra life</b>. Take a hit with a life in the bank and your escort
+      saves you instead of ending the run.
     </div>
     <div class="pulse">Tap the board (or press SPACE) to start</div>
   </div>
@@ -237,7 +240,7 @@
   let player, orbs, particles, stars, score, combo, comboTimer, maxCombo,
       spawnT, hazardChance, elapsed, slowmo, shake, best, deathT, ringPulse,
       eaten, speedLevel, flashMsg, flashT, abilities, pops, frenzy, hueShift,
-      dimension, shield, slowPulseT, beams, beamT;
+      dimension, shield, slowPulseT, beams, beamT, lives;
 
   const ABILITY_TIME = 30; // seconds each ability lasts
 
@@ -263,6 +266,7 @@
     pops = []; frenzy = 0; hueShift = 0;
     dimension = 0; shield = 0; slowPulseT = 0;
     beams = []; beamT = 60;
+    lives = 0;
     initStars();
   }
 
@@ -276,8 +280,8 @@
     else { x=-30; y=rand(0,H); }
     const tx = rand(W*.2, W*.8), ty = rand(H*.2, H*.8);
     const ang = Math.atan2(ty-y, tx-x);
-    const baseSpeed = (1.0 + elapsed*0.018 + dimension*0.12) * curDim().phys.omul;
-    const speed = rand(baseSpeed, baseSpeed*1.7);
+    const baseSpeed = (0.9 + elapsed*0.012 + dimension*0.09) * curDim().phys.omul;
+    const speed = rand(baseSpeed, baseSpeed*1.6);
 
     const roll = Math.random();
     let type = 'good', power = null;
@@ -291,13 +295,16 @@
     } else {
       const r2 = Math.random();
       const goldCut = curDim().perk === 'goldrush' ? 0.13 : 0.057; // GOLD RUSH spawns more gold
-      if (r2 < 0.022) { type = 'power'; power = ['magnet','ghost','swarm'][Math.floor(Math.random()*3)]; }
-      else if (r2 < goldCut) type = 'gold';
+      const ufoCut = 0.06;                                       // fairly common alien rescue ship (+1 life)
+      if (r2 < ufoCut) { type = 'ufo'; }
+      else if (r2 < ufoCut + 0.022) { type = 'power'; power = ['magnet','ghost','swarm'][Math.floor(Math.random()*3)]; }
+      else if (r2 < ufoCut + goldCut) type = 'gold';
     }
 
     const r = type==='hazard' ? rand(9,15)
             : type==='rocket' ? 10
             : type==='mine'   ? 13
+            : type==='ufo'    ? 16
             : type==='power'  ? 17
             : type==='gold'   ? 12
             : rand(7,11);
@@ -420,15 +427,34 @@
     ringPulse = 1;
     slowmo = Math.max(slowmo, 26);
     slowPulseT = 200;
-    // clear hazards near the player on arrival
+    // clear nearby threats on arrival (shards, rockets, mines)
     for (let i=orbs.length-1;i>=0;i--){
       const o = orbs[i];
-      if (o.type==='hazard' && dist2(o.x,o.y,player.x,player.y) < 150*150) { burst(o.x,o.y,'#ff3a5e',8,4); orbs.splice(i,1); }
+      if ((o.type==='hazard'||o.type==='rocket'||o.type==='mine') && dist2(o.x,o.y,player.x,player.y) < 150*150) { burst(o.x,o.y,'#ff3a5e',8,4); orbs.splice(i,1); }
     }
     burst(player.x, player.y, d.star, 50, 9);
     burst(player.x, player.y, '#ffffff', 26, 6);
     Sound.levelup(); Sound.power();
     buzz([0,40,30,40,30,70]);
+  }
+
+  // an alien escort takes the hit for you: spend a life, get a moment of safety
+  function rescue() {
+    shield = 1.7;                 // brief invulnerability so you don't instantly die again
+    slowmo = Math.max(slowmo, 44);
+    shake = Math.min(1, shake + 0.8);
+    ringPulse = 1;
+    flashMsg = lives > 0 ? ('🛸 SAVED!  ' + lives + ' LIFE' + (lives===1?'':'S') + ' LEFT') : '🛸 LAST ESCORT GONE — STAY SHARP';
+    flashT = 1.4;
+    // blow away everything dangerous nearby
+    for (let i=orbs.length-1;i>=0;i--){
+      const o = orbs[i];
+      if ((o.type==='hazard'||o.type==='rocket'||o.type==='mine') && dist2(o.x,o.y,player.x,player.y) < 160*160) { burst(o.x,o.y,'#5dff8f',8,4); orbs.splice(i,1); }
+    }
+    burst(player.x, player.y, '#5dff8f', 40, 8);
+    burst(player.x, player.y, '#ffffff', 22, 6);
+    Sound.power(); Sound.levelup();
+    buzz([0,70,40,90]);
   }
 
   function activateAbility(kind) {
@@ -505,9 +531,9 @@
       if (slowPulseT <= 0) { slowmo = Math.max(slowmo, 30); slowPulseT = 210; popText(player.x, player.y-26, 'TIME WARP', '#b59cff'); }
     }
 
-    // difficulty ramp — each dimension warp raises the stakes
-    hazardChance = Math.min(0.52, 0.18 + elapsed*0.006 + dimension*0.025);
-    const spawnRate = Math.max(5, 26 - elapsed*0.7 - dimension*1.1); // frames between spawns (lower = faster)
+    // difficulty ramp — each dimension warp raises the stakes (kept fun, not brutal)
+    hazardChance = Math.min(0.38, 0.12 + elapsed*0.004 + dimension*0.016);
+    const spawnRate = Math.max(9, 30 - elapsed*0.45 - dimension*0.85); // frames between spawns (lower = faster)
     spawnT -= dt;
     if (spawnT <= 0) { spawnOrb(); spawnT = spawnRate * rand(.7,1.3); }
 
@@ -554,7 +580,7 @@
 
       // MAGNET: suck score orbs toward the player (ability = strong; MAGNETAR dim = gentle)
       const magPull = abilities.magnet > 0 ? 0.85 : (curDim().perk==='magnet' ? 0.30 : 0);
-      if (magPull > 0 && (o.type==='good' || o.type==='gold')) {
+      if (magPull > 0 && (o.type==='good' || o.type==='gold' || o.type==='ufo')) {
         const dx=player.x-o.x, dy=player.y-o.y, d=Math.hypot(dx,dy)||1;
         const cap = abilities.magnet > 0 ? 9 : 5;
         o.vx += (dx/d)*magPull*dt; o.vy += (dy/d)*magPull*dt;
@@ -634,10 +660,26 @@
             // INVISIBLE / warp-shield: phase through harmlessly + spark feedback
             burst(o.x, o.y, shield > 0 ? '#ffffff' : '#bfe0ff', 5, 3.5);
             if (o.type==='rocket' || o.type==='mine') { orbs.splice(i,1); continue; } // consume homing threats
+          } else if (lives > 0) {
+            // an alien escort sacrifices itself — spend a life, brief invulnerability
+            lives--;
+            rescue();
+            if (o.type==='rocket' || o.type==='mine') { orbs.splice(i,1); continue; }
           } else {
             die(now);
             return;
           }
+        } else if (o.type==='ufo') {
+          // ALIEN RESCUE SHIP: banks an extra life and warps you through a wormhole
+          lives = Math.min(5, lives + 1);
+          burst(o.x, o.y, '#5dff8f', 30, 7);
+          burst(o.x, o.y, '#ffffff', 16, 5);
+          popText(o.x, o.y, '+1 LIFE', '#5dff8f', true);
+          Sound.power(); buzz([0,40,30,60]);
+          orbs.splice(i,1);
+          warpDimension();
+          flashMsg = '🛸 ABDUCTED!  +1 LIFE · WORMHOLE JUMP';
+          flashT = 1.6;
         } else if (o.type==='power') {
           activateAbility(o.power);
           burst(o.x, o.y, o.power==='swarm' ? '#ff2a4d' : '#ffffff', 18, 5);
@@ -687,7 +729,10 @@
           const within = b.orient==='h'
             ? Math.abs(player.y - b.pos) < b.thick/2 + player.r
             : Math.abs(player.x - b.pos) < b.thick/2 + player.r;
-          if (within) { die(now); return; }
+          if (within) {
+            if (lives > 0) { lives--; rescue(); }
+            else { die(now); return; }
+          }
         }
         if (b.t <= 0) beams.splice(i,1);
       }
@@ -864,6 +909,42 @@
           ctx.globalAlpha = 0.55; ctx.strokeStyle = '#ff2a3e'; ctx.lineWidth = 2;
           ctx.beginPath(); ctx.arc(0,0,o.r + (36 - Math.max(0,o.armT)), 0, 7); ctx.stroke();
           ctx.globalAlpha = 1;
+        }
+        ctx.restore();
+      } else if (o.type==='ufo') {
+        ctx.save();
+        ctx.translate(o.x, o.y + Math.sin(o.life*0.1)*2); // gentle hover bob
+        const glow = '#5dff8f';
+        // tractor beam shaft
+        ctx.globalAlpha = 0.16 + 0.10*Math.sin(now*0.02);
+        ctx.fillStyle = glow;
+        ctx.beginPath();
+        ctx.moveTo(-o.r*0.5, o.r*0.35); ctx.lineTo(o.r*0.5, o.r*0.35);
+        ctx.lineTo(o.r*1.1, o.r*1.9); ctx.lineTo(-o.r*1.1, o.r*1.9);
+        ctx.closePath(); ctx.fill();
+        ctx.globalAlpha = 1;
+        // glass dome
+        ctx.shadowColor = glow; ctx.shadowBlur = 18;
+        ctx.fillStyle = 'rgba(190,255,215,0.85)';
+        ctx.beginPath(); ctx.arc(0, -o.r*0.1, o.r*0.62, Math.PI, 0); ctx.fill();
+        ctx.shadowBlur = 0;
+        // little green alien inside
+        ctx.fillStyle = '#56e07a';
+        ctx.beginPath(); ctx.arc(0, -o.r*0.22, o.r*0.32, 0, 7); ctx.fill();
+        ctx.fillStyle = '#0a2a14';
+        ctx.beginPath();
+        ctx.ellipse(-o.r*0.13, -o.r*0.24, o.r*0.08, o.r*0.13, 0.4, 0, 7);
+        ctx.ellipse( o.r*0.13, -o.r*0.24, o.r*0.08, o.r*0.13,-0.4, 0, 7);
+        ctx.fill();
+        // saucer body
+        ctx.shadowColor = glow; ctx.shadowBlur = 16;
+        ctx.fillStyle = '#d7ecff';
+        ctx.beginPath(); ctx.ellipse(0, o.r*0.05, o.r*1.25, o.r*0.46, 0, 0, 7); ctx.fill();
+        ctx.shadowBlur = 0;
+        // blinking running lights
+        for (let k=-2;k<=2;k++){
+          ctx.fillStyle = (Math.floor(now*0.01)+k) % 2 ? '#ffd24a' : '#ff5ed0';
+          ctx.beginPath(); ctx.arc(k*o.r*0.42, o.r*0.22, o.r*0.1, 0, 7); ctx.fill();
         }
         ctx.restore();
       } else if (o.type==='power') {
@@ -1048,8 +1129,17 @@
       ctx.font='800 12px system-ui'; ctx.fillStyle=dm.star||'#9fc0ff';
       ctx.fillText('◈ DIM '+(dimension+1)+' · '+dm.name+'   '+(eaten%25)+'/25', 18, 88);
 
-      // active ability timers
+      // extra lives (alien escorts)
       let ay = 110;
+      if (lives > 0) {
+        ctx.font='800 13px system-ui'; ctx.fillStyle='#5dff8f';
+        ctx.shadowColor='#5dff8f'; ctx.shadowBlur=8;
+        ctx.fillText('🛸'.repeat(lives) + '  ×'+lives+' LIVES', 18, 106);
+        ctx.shadowBlur=0;
+        ay = 128;
+      }
+
+      // active ability timers
       const chip = (label, secs, col) => {
         ctx.textAlign='left';
         ctx.font='800 14px system-ui'; ctx.fillStyle=col;
