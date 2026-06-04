@@ -297,7 +297,7 @@
     } else {
       const r2 = Math.random();
       const goldCut = curDim().perk === 'goldrush' ? 0.13 : 0.057; // GOLD RUSH spawns more gold
-      const ufoCut = 0.06;                                       // fairly common alien rescue ship (+1 life)
+      const ufoCut = 0.025;                                      // occasional alien rescue ship (+1 life)
       if (r2 < ufoCut) { type = 'ufo'; }
       else if (r2 < ufoCut + 0.022) { type = 'power'; power = ['magnet','ghost','swarm'][Math.floor(Math.random()*3)]; }
       else if (r2 < ufoCut + goldCut) type = 'gold';
