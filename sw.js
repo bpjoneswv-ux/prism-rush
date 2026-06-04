@@ -1,4 +1,4 @@
-const CACHE = 'prism-rush-v10';
+const CACHE = 'prism-rush-v11';
 const ASSETS = [
   './',
   './index.html',

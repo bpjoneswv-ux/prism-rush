@@ -60,7 +60,8 @@
     <h1>PRISM RUSH</h1>
     <div class="sub">
       <b>Drag anywhere</b> to steer — the orb floats just above your finger. <b>Absorb</b> the glowing orbs to score.
-      <b>Dodge</b> the red shards — one hit ends your run.<br><br>
+      <b>Dodge</b> the red shards, <b style="color:#ff7a3a">homing rockets</b>, <b style="color:#ff3a4e">proximity mines</b>
+      and <b style="color:#ff5a7a">sweeping lasers</b> — one hit ends your run. Skim them for <b style="color:#ff7ad9">CLUTCH</b> bonuses.<br><br>
       Your combo multiplier <b>decays fast</b> — keep collecting to keep it alive.
       Hit <b style="color:#ffd24a">x20 combo</b> for <b style="color:#ff5ed0">⚡ FRENZY x2 ⚡</b>.
       Skim hazards for <b>close-call bonuses</b>. Grab gold for <b>slow-mo</b>.<br><br>
@@ -206,19 +207,27 @@
   // PHYSICS (how the orb moves), the ambient VISUAL fx, and raises difficulty.
   //   phys.follow = responsiveness toward your finger   phys.resp = inertia (1 = tight, low = floaty)
   //   phys.pull   = gravity-well strength toward center  phys.wobble = chaotic jitter  phys.omul = orb-speed mult
+  //   haz = how a spawned hazard breaks down: chance it's a homing rocket / proximity mine
+  //   (else a plain shard), plus a per-tick chance to fire a sweeping laser.
   const DIMENSIONS = [
     { name:'PRISM',       bg:'#05060f', star:'#9fc0ff', perk:null,        blurb:'',
-      fx:null,      phys:{ follow:1.00, resp:1.00, pull:0,     wobble:0,   omul:1.00 } },
+      fx:null,      phys:{ follow:1.00, resp:1.00, pull:0,     wobble:0,   omul:1.00 },
+      haz:{ rocket:0.00, mine:0.00, laser:0.00 } },
     { name:'NEON VOID',   bg:'#0b0518', star:'#d59cff', perk:'closecall', blurb:'zero-G drift · wider close-calls',
-      fx:'grid',    phys:{ follow:0.85, resp:0.10, pull:0,     wobble:0,   omul:0.95 } },
-    { name:'MAGNETAR',    bg:'#03121b', star:'#7af0ff', perk:'magnet',    blurb:'heavy & magnetic · orbs drift in',
-      fx:'rings',   phys:{ follow:0.90, resp:0.26, pull:0,     wobble:0,   omul:1.00 } },
+      fx:'grid',    phys:{ follow:0.85, resp:0.10, pull:0,     wobble:0,   omul:0.95 },
+      haz:{ rocket:0.20, mine:0.00, laser:0.00 } },
+    { name:'MAGNETAR',    bg:'#03121b', star:'#7af0ff', perk:'magnet',    blurb:'heavy & magnetic · homing rockets',
+      fx:'rings',   phys:{ follow:0.90, resp:0.26, pull:0,     wobble:0,   omul:1.00 },
+      haz:{ rocket:0.34, mine:0.18, laser:0.00 } },
     { name:'GOLD RUSH',   bg:'#15110a', star:'#ffd86b', perk:'goldrush',  blurb:'hyperspeed · extra gold',
-      fx:'sparkle', phys:{ follow:1.40, resp:0.90, pull:0,     wobble:0,   omul:1.15 } },
-    { name:'INFERNO',     bg:'#1a0607', star:'#ff9a7a', perk:'combo2',    blurb:'turbulence · double combo',
-      fx:'embers',  phys:{ follow:1.00, resp:0.55, pull:0,     wobble:2.4, omul:1.30 } },
-    { name:'SINGULARITY', bg:'#0c0119', star:'#b59cff', perk:'slowpulse', blurb:'gravity well · time stutters',
-      fx:'vortex',  phys:{ follow:0.95, resp:0.42, pull:0.045, wobble:0,   omul:1.00 } }
+      fx:'sparkle', phys:{ follow:1.40, resp:0.90, pull:0,     wobble:0,   omul:1.15 },
+      haz:{ rocket:0.24, mine:0.12, laser:0.18 } },
+    { name:'INFERNO',     bg:'#1a0607', star:'#ff9a7a', perk:'combo2',    blurb:'turbulence · laser grids',
+      fx:'embers',  phys:{ follow:1.00, resp:0.55, pull:0,     wobble:2.4, omul:1.30 },
+      haz:{ rocket:0.26, mine:0.10, laser:0.45 } },
+    { name:'SINGULARITY', bg:'#0c0119', star:'#b59cff', perk:'slowpulse', blurb:'gravity well · minefield',
+      fx:'vortex',  phys:{ follow:0.95, resp:0.42, pull:0.045, wobble:0,   omul:1.00 },
+      haz:{ rocket:0.20, mine:0.38, laser:0.10 } }
   ];
   function curDim() { return DIMENSIONS[dimension % DIMENSIONS.length]; }
 
@@ -228,7 +237,7 @@
   let player, orbs, particles, stars, score, combo, comboTimer, maxCombo,
       spawnT, hazardChance, elapsed, slowmo, shake, best, deathT, ringPulse,
       eaten, speedLevel, flashMsg, flashT, abilities, pops, frenzy, hueShift,
-      dimension, shield, slowPulseT;
+      dimension, shield, slowPulseT, beams, beamT;
 
   const ABILITY_TIME = 30; // seconds each ability lasts
 
@@ -253,6 +262,7 @@
     abilities = { magnet:0, ghost:0, swarm:0 };
     pops = []; frenzy = 0; hueShift = 0;
     dimension = 0; shield = 0; slowPulseT = 0;
+    beams = []; beamT = 60;
     initStars();
   }
 
@@ -271,8 +281,14 @@
 
     const roll = Math.random();
     let type = 'good', power = null;
-    if (roll < hazardChance) type = 'hazard';
-    else {
+    if (roll < hazardChance) {
+      // a hazard spawned — decide which flavor (shard / rocket / mine) for this dimension
+      type = 'hazard';
+      const hz = curDim().haz;
+      const hr = Math.random();
+      if (elapsed > 7 && hr < hz.rocket) type = 'rocket';
+      else if (elapsed > 10 && hr < hz.rocket + hz.mine) type = 'mine';
+    } else {
       const r2 = Math.random();
       const goldCut = curDim().perk === 'goldrush' ? 0.13 : 0.057; // GOLD RUSH spawns more gold
       if (r2 < 0.022) { type = 'power'; power = ['magnet','ghost','swarm'][Math.floor(Math.random()*3)]; }
@@ -280,16 +296,54 @@
     }
 
     const r = type==='hazard' ? rand(9,15)
+            : type==='rocket' ? 10
+            : type==='mine'   ? 13
             : type==='power'  ? 17
             : type==='gold'   ? 12
             : rand(7,11);
 
-    orbs.push({
+    const o = {
       x, y,
       vx: Math.cos(ang)*speed, vy: Math.sin(ang)*speed,
       r, type, power, life:0, scored:false, near:false,
       spin: rand(0, Math.PI*2)
-    });
+    };
+    if (type === 'rocket') {
+      // homing missile: tracks you for a limited fuel window, then flies straight
+      const slow = (1.4 + dimension*0.10 + elapsed*0.004);
+      o.vx = Math.cos(ang)*slow; o.vy = Math.sin(ang)*slow;
+      o.maxSpd = Math.min(4.2, 2.0 + dimension*0.12 + elapsed*0.004);
+      o.turn = curDim().perk==='magnet' ? 0.085 : 0.05; // MAGNETAR rockets curve harder
+      o.fuel = rand(80, 130);
+      o.emitT = 0;
+    } else if (type === 'mine') {
+      // proximity mine: drifts slowly, arms when you're near, then bursts into shrapnel
+      const slow = rand(0.25, 0.7);
+      o.vx = Math.cos(ang)*slow; o.vy = Math.sin(ang)*slow;
+      o.armed = false; o.armT = 0;
+    }
+    orbs.push(o);
+  }
+
+  // mine detonation: throw a ring of fast shards outward
+  function explodeMine(o) {
+    const n = 9 + Math.floor(dimension*0.6);
+    const sp = 2.6 + dimension*0.12;
+    for (let k=0;k<n;k++){
+      const a = (k/n)*Math.PI*2 + rand(-0.1,0.1);
+      orbs.push({ x:o.x, y:o.y, vx:Math.cos(a)*sp, vy:Math.sin(a)*sp,
+        r:6, type:'hazard', power:null, life:0, scored:false, near:false, spin:rand(0,7) });
+    }
+    burst(o.x,o.y,'#ff5a2a',26,7); burst(o.x,o.y,'#ffd24a',14,5);
+    shake = Math.min(1, shake+0.55); Sound.power(); buzz([0,50,30,70]);
+  }
+
+  // sweeping laser: telegraphs a line, then fires a lethal beam across it
+  function spawnBeam() {
+    const orient = Math.random() < 0.5 ? 'h' : 'v';
+    const pos = orient==='h' ? rand(H*0.15, H*0.85) : rand(W*0.15, W*0.85);
+    beams.push({ orient, pos, state:'charge', t: 52, thick: 24 });
+    Sound.close();
   }
 
   function burst(x, y, color, n, spd) {
@@ -513,6 +567,39 @@
         const sp=Math.hypot(o.vx,o.vy); if (sp>3.2){ o.vx=o.vx/sp*3.2; o.vy=o.vy/sp*3.2; }
       }
 
+      // ROCKET: steer toward the player while it has fuel, then coast straight
+      if (o.type==='rocket') {
+        if (o.fuel > 0) {
+          o.fuel -= dt;
+          const desired = Math.atan2(player.y-o.y, player.x-o.x);
+          let cur = Math.atan2(o.vy, o.vx);
+          let diff = ((desired - cur + Math.PI*3) % (Math.PI*2)) - Math.PI;
+          const turn = o.turn * dt;
+          cur += Math.max(-turn, Math.min(turn, diff));
+          const sp = Math.min(o.maxSpd, Math.hypot(o.vx,o.vy) + 0.04*dt);
+          o.vx = Math.cos(cur)*sp; o.vy = Math.sin(cur)*sp;
+        }
+        o.emitT -= dt;
+        if (o.emitT <= 0) {
+          particles.push({ x:o.x, y:o.y, vx:rand(-.4,.4), vy:rand(-.4,.4),
+            r:rand(1.5,3), life:0.6, color: Math.random()<.5?'#ff7a3a':'#ffd24a' });
+          o.emitT = 2;
+        }
+      }
+
+      // MINE: arm when the player gets close, detonate after a short fuse
+      if (o.type==='mine') {
+        const dd2 = dist2(o.x,o.y,player.x,player.y);
+        if (!o.armed && dd2 < 96*96) {
+          o.armed = true; o.armT = 36;
+          Sound.close(); buzz(18); popText(o.x, o.y-18, '!', '#ff3a5e');
+        }
+        if (o.armed) {
+          o.armT -= dt;
+          if (o.armT <= 0) { explodeMine(o); orbs.splice(i,1); continue; }
+        }
+      }
+
       o.x += o.vx*dt; o.y += o.vy*dt; o.life += dt; o.spin += 0.04*dt;
 
       // remove if drifted far off
@@ -523,25 +610,30 @@
       const d2 = dist2(o.x,o.y,player.x,player.y);
       const collideR = pr + o.r;
 
-      // close-call detection (for non-hazard skimming of hazards)
-      if (o.type==='hazard' && !o.near) {
-        const ccRange = curDim().perk==='closecall' ? 46 : 26; // NEON VOID widens the bonus zone
+      const lethal = (o.type==='hazard' || o.type==='rocket' || o.type==='mine');
+
+      // close-call / CLUTCH: skim a lethal threat without touching it for bonus points
+      if (lethal && !o.near) {
+        const clutch = (o.type==='rocket' || o.type==='mine');
+        const ccRange = (curDim().perk==='closecall' ? 46 : 26) + (clutch ? 16 : 0);
         if (d2 < (collideR+ccRange)*(collideR+ccRange) && d2 > collideR*collideR) {
           o.near = true;
-          const g = addScore(15);
-          popText(player.x, player.y - 22, '+' + g + ' CLOSE!', '#7af0ff');
-          burst(player.x, player.y, '#7af0ff', 6, 3);
-          ringPulse = 0.7;
+          const g = addScore(clutch ? 30 : 15);
+          popText(player.x, player.y - 22, '+' + g + (clutch ? ' CLUTCH!' : ' CLOSE!'), clutch ? '#ff7ad9' : '#7af0ff');
+          burst(player.x, player.y, clutch ? '#ff7ad9' : '#7af0ff', clutch ? 10 : 6, 3.5);
+          ringPulse = clutch ? 0.9 : 0.7;
+          if (clutch) { slowmo = Math.max(slowmo, 22); shake = Math.min(1, shake+0.2); }
           Sound.close();
-          buzz(12);
+          buzz(clutch ? [0,16,18,16] : 12);
         }
       }
 
       if (d2 < collideR*collideR) {
-        if (o.type==='hazard') {
+        if (lethal) {
           if (abilities.ghost > 0 || shield > 0) {
             // INVISIBLE / warp-shield: phase through harmlessly + spark feedback
-            burst(o.x, o.y, shield > 0 ? '#ffffff' : '#bfe0ff', 4, 3);
+            burst(o.x, o.y, shield > 0 ? '#ffffff' : '#bfe0ff', 5, 3.5);
+            if (o.type==='rocket' || o.type==='mine') { orbs.splice(i,1); continue; } // consume homing threats
           } else {
             die(now);
             return;
@@ -573,6 +665,31 @@
           eat();
           orbs.splice(i,1);
         }
+      }
+    }
+
+    // ---- sweeping lasers ----
+    const laserRate = curDim().haz.laser;
+    if (laserRate > 0 && elapsed > 14) {
+      beamT -= dt;
+      if (beamT <= 0) {
+        if (Math.random() < laserRate) spawnBeam();
+        beamT = rand(80, 170);
+      }
+    }
+    for (let i=beams.length-1;i>=0;i--){
+      const b = beams[i];
+      b.t -= dt;
+      if (b.state==='charge') {
+        if (b.t <= 0) { b.state='fire'; b.t = 18; Sound.power(); buzz(45); shake = Math.min(1, shake+0.4); }
+      } else { // firing — lethal across the line
+        if (!(abilities.ghost > 0 || shield > 0)) {
+          const within = b.orient==='h'
+            ? Math.abs(player.y - b.pos) < b.thick/2 + player.r
+            : Math.abs(player.x - b.pos) < b.thick/2 + player.r;
+          if (within) { die(now); return; }
+        }
+        if (b.t <= 0) beams.splice(i,1);
       }
     }
   }
@@ -704,6 +821,51 @@
         ctx.closePath(); ctx.fill();
         ctx.fillStyle='#ff8aa0'; ctx.beginPath(); ctx.arc(0,0,o.r*.45,0,7); ctx.fill();
         ctx.restore();
+      } else if (o.type==='rocket') {
+        const ang = Math.atan2(o.vy, o.vx);
+        ctx.save();
+        ctx.translate(o.x,o.y); ctx.rotate(ang);
+        // flame tail
+        ctx.globalAlpha = 0.85; ctx.fillStyle = Math.random()<.5 ? '#ffb23a' : '#ff7a3a';
+        ctx.beginPath();
+        ctx.moveTo(-o.r*0.7, 0);
+        ctx.lineTo(-o.r - rand(8,18), o.r*0.45);
+        ctx.lineTo(-o.r - rand(8,18), -o.r*0.45);
+        ctx.closePath(); ctx.fill();
+        ctx.globalAlpha = 1;
+        // body (arrowhead pointing along travel)
+        ctx.shadowColor='#ff3a5e'; ctx.shadowBlur=16; ctx.fillStyle='#ff3a5e';
+        ctx.beginPath();
+        ctx.moveTo(o.r*1.5, 0);
+        ctx.lineTo(-o.r*0.8, o.r*0.75);
+        ctx.lineTo(-o.r*0.8, -o.r*0.75);
+        ctx.closePath(); ctx.fill();
+        ctx.shadowBlur=0; ctx.fillStyle='#fff';
+        ctx.beginPath(); ctx.arc(o.r*0.2, 0, o.r*0.26, 0, 7); ctx.fill();
+        ctx.restore();
+      } else if (o.type==='mine') {
+        ctx.save();
+        ctx.translate(o.x,o.y);
+        const blink = o.armed ? (Math.sin(now*0.05) > 0) : (Math.sin(now*0.006) > 0.6);
+        ctx.shadowColor = o.armed ? '#ff2a3e' : '#7a3a46'; ctx.shadowBlur = o.armed ? 22 : 8;
+        ctx.fillStyle = '#3a1118';
+        ctx.beginPath(); ctx.arc(0,0,o.r,0,7); ctx.fill();
+        ctx.shadowBlur = 0;
+        // spikes
+        ctx.strokeStyle = '#5a2530'; ctx.lineWidth = 3;
+        for (let k=0;k<8;k++){ const a=k*Math.PI/4 + o.spin*0.3;
+          ctx.beginPath(); ctx.moveTo(Math.cos(a)*o.r, Math.sin(a)*o.r);
+          ctx.lineTo(Math.cos(a)*o.r*1.45, Math.sin(a)*o.r*1.45); ctx.stroke(); }
+        // core light
+        ctx.fillStyle = blink ? '#ff3a4e' : '#5a1a22';
+        ctx.beginPath(); ctx.arc(0,0,o.r*0.4,0,7); ctx.fill();
+        // arming warning ring
+        if (o.armed) {
+          ctx.globalAlpha = 0.55; ctx.strokeStyle = '#ff2a3e'; ctx.lineWidth = 2;
+          ctx.beginPath(); ctx.arc(0,0,o.r + (36 - Math.max(0,o.armT)), 0, 7); ctx.stroke();
+          ctx.globalAlpha = 1;
+        }
+        ctx.restore();
       } else if (o.type==='power') {
         const glow = o.power==='magnet' ? '#5dff8f' : o.power==='ghost' ? '#bfe0ff' : '#ff2a4d';
         const pulse = 1 + Math.sin(o.life*0.16)*0.10;
@@ -760,6 +922,25 @@
       }
     }
     ctx.shadowBlur=0;
+
+    // sweeping lasers: telegraph line while charging, blazing beam while firing
+    for (const b of beams) {
+      if (b.state==='charge') {
+        ctx.globalAlpha = 0.30 + 0.30*Math.sin(now*0.03);
+        ctx.fillStyle = '#ff3a5e';
+        if (b.orient==='h') ctx.fillRect(0, b.pos-1.5, W, 3);
+        else                ctx.fillRect(b.pos-1.5, 0, 3, H);
+      } else {
+        ctx.shadowColor = '#ff3a5e'; ctx.shadowBlur = 30;
+        ctx.globalAlpha = 0.92; ctx.fillStyle = '#ff5a7a';
+        if (b.orient==='h') ctx.fillRect(0, b.pos-b.thick/2, W, b.thick);
+        else                ctx.fillRect(b.pos-b.thick/2, 0, b.thick, H);
+        ctx.shadowBlur = 0; ctx.globalAlpha = 1; ctx.fillStyle = '#fff';
+        if (b.orient==='h') ctx.fillRect(0, b.pos-b.thick/6, W, b.thick/3);
+        else                ctx.fillRect(b.pos-b.thick/6, 0, b.thick/3, H);
+      }
+    }
+    ctx.globalAlpha = 1; ctx.shadowBlur = 0;
 
     // particles
     for (const p of particles) {
