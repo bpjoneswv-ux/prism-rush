@@ -200,12 +200,24 @@
     { core:'#9adcff', glow:'#3aa0ff' }  // blue
   ];
 
+  // dimensions cycle every 25 orbs — each re-themes the world, adds a perk, raises difficulty
+  const DIMENSIONS = [
+    { name:'PRISM',       bg:'#05060f', star:'#9fc0ff', perk:null,        blurb:'' },
+    { name:'NEON VOID',   bg:'#0b0518', star:'#d59cff', perk:'closecall', blurb:'wider close-calls' },
+    { name:'MAGNETAR',    bg:'#03121b', star:'#7af0ff', perk:'magnet',    blurb:'orbs drift to you' },
+    { name:'GOLD RUSH',   bg:'#15110a', star:'#ffd86b', perk:'goldrush',  blurb:'extra gold' },
+    { name:'INFERNO',     bg:'#1a0607', star:'#ff9a7a', perk:'combo2',    blurb:'double combo gain' },
+    { name:'SINGULARITY', bg:'#0c0119', star:'#b59cff', perk:'slowpulse', blurb:'time stutters' }
+  ];
+  function curDim() { return DIMENSIONS[dimension % DIMENSIONS.length]; }
+
   // ---- game state ----
   const STATE = { MENU:0, PLAY:1, DEAD:2 };
   let state = STATE.MENU;
   let player, orbs, particles, stars, score, combo, comboTimer, maxCombo,
       spawnT, hazardChance, elapsed, slowmo, shake, best, deathT, ringPulse,
-      eaten, speedLevel, flashMsg, flashT, abilities, pops, frenzy, hueShift;
+      eaten, speedLevel, flashMsg, flashT, abilities, pops, frenzy, hueShift,
+      dimension, shield, slowPulseT;
 
   const ABILITY_TIME = 30; // seconds each ability lasts
 
@@ -229,6 +241,7 @@
     eaten = 0; speedLevel = 0; flashMsg = ''; flashT = 0;
     abilities = { magnet:0, ghost:0, swarm:0 };
     pops = []; frenzy = 0; hueShift = 0;
+    dimension = 0; shield = 0; slowPulseT = 0;
     initStars();
   }
 
@@ -242,7 +255,7 @@
     else { x=-30; y=rand(0,H); }
     const tx = rand(W*.2, W*.8), ty = rand(H*.2, H*.8);
     const ang = Math.atan2(ty-y, tx-x);
-    const baseSpeed = 1.0 + elapsed*0.018;
+    const baseSpeed = 1.0 + elapsed*0.018 + dimension*0.12;
     const speed = rand(baseSpeed, baseSpeed*1.7);
 
     const roll = Math.random();
@@ -250,8 +263,9 @@
     if (roll < hazardChance) type = 'hazard';
     else {
       const r2 = Math.random();
+      const goldCut = curDim().perk === 'goldrush' ? 0.13 : 0.057; // GOLD RUSH spawns more gold
       if (r2 < 0.022) { type = 'power'; power = ['magnet','ghost','swarm'][Math.floor(Math.random()*3)]; }
-      else if (r2 < 0.057) type = 'gold';
+      else if (r2 < goldCut) type = 'gold';
     }
 
     const r = type==='hazard' ? rand(9,15)
@@ -313,7 +327,7 @@
     }
   }
 
-  // called when an orb is absorbed; every 50 -> new color + 1 speed
+  // called when an orb is absorbed; every 50 -> speed+1, every 25 -> dimension warp
   function eat() {
     eaten++;
     if (eaten % 50 === 0) {
@@ -326,6 +340,29 @@
       burst(player.x, player.y, '#ffffff', 16, 5);
       Sound.levelup();
     }
+    if (eaten % 25 === 0) warpDimension();
+  }
+
+  // warp into the next dimension: re-theme, new perk, harder
+  function warpDimension() {
+    dimension++;
+    const d = curDim();
+    flashMsg = '◈ DIMENSION ' + (dimension+1) + ' ◈  ' + d.name + (d.blurb ? '  ·  ' + d.blurb : '');
+    flashT = 1.5;
+    shake = 1;
+    shield = 1.4;          // brief invulnerability so the warp isn't instant death
+    ringPulse = 1;
+    slowmo = Math.max(slowmo, 26);
+    slowPulseT = 200;
+    // clear hazards near the player on arrival
+    for (let i=orbs.length-1;i>=0;i--){
+      const o = orbs[i];
+      if (o.type==='hazard' && dist2(o.x,o.y,player.x,player.y) < 150*150) { burst(o.x,o.y,'#ff3a5e',8,4); orbs.splice(i,1); }
+    }
+    burst(player.x, player.y, d.star, 50, 9);
+    burst(player.x, player.y, '#ffffff', 26, 6);
+    Sound.levelup(); Sound.power();
+    buzz([0,40,30,40,30,70]);
   }
 
   function activateAbility(kind) {
@@ -394,10 +431,17 @@
     // ability countdowns (real seconds)
     for (const k in abilities) if (abilities[k] > 0) abilities[k] = Math.max(0, abilities[k] - dt/60);
     if (frenzy > 0) frenzy = Math.max(0, frenzy - dt/60);
+    if (shield > 0) shield = Math.max(0, shield - dt/60);
 
-    // difficulty ramp
-    hazardChance = Math.min(0.42, 0.18 + elapsed*0.006);
-    const spawnRate = Math.max(7, 26 - elapsed*0.7); // frames between spawns (lower = faster)
+    // SINGULARITY perk: time stutters into slow-mo periodically
+    if (curDim().perk === 'slowpulse') {
+      slowPulseT -= dt;
+      if (slowPulseT <= 0) { slowmo = Math.max(slowmo, 30); slowPulseT = 210; popText(player.x, player.y-26, 'TIME WARP', '#b59cff'); }
+    }
+
+    // difficulty ramp — each dimension warp raises the stakes
+    hazardChance = Math.min(0.52, 0.18 + elapsed*0.006 + dimension*0.025);
+    const spawnRate = Math.max(5, 26 - elapsed*0.7 - dimension*1.1); // frames between spawns (lower = faster)
     spawnT -= dt;
     if (spawnT <= 0) { spawnOrb(); spawnT = spawnRate * rand(.7,1.3); }
 
@@ -422,11 +466,13 @@
     for (let i=orbs.length-1;i>=0;i--){
       const o = orbs[i];
 
-      // MAGNET: suck score orbs toward the player
-      if (abilities.magnet > 0 && (o.type==='good' || o.type==='gold')) {
+      // MAGNET: suck score orbs toward the player (ability = strong; MAGNETAR dim = gentle)
+      const magPull = abilities.magnet > 0 ? 0.85 : (curDim().perk==='magnet' ? 0.30 : 0);
+      if (magPull > 0 && (o.type==='good' || o.type==='gold')) {
         const dx=player.x-o.x, dy=player.y-o.y, d=Math.hypot(dx,dy)||1;
-        o.vx += (dx/d)*0.85*dt; o.vy += (dy/d)*0.85*dt;
-        const sp=Math.hypot(o.vx,o.vy); if (sp>9){ o.vx=o.vx/sp*9; o.vy=o.vy/sp*9; }
+        const cap = abilities.magnet > 0 ? 9 : 5;
+        o.vx += (dx/d)*magPull*dt; o.vy += (dy/d)*magPull*dt;
+        const sp=Math.hypot(o.vx,o.vy); if (sp>cap){ o.vx=o.vx/sp*cap; o.vy=o.vy/sp*cap; }
       }
       // SWARM (curse): red hazards slowly home in on the player
       if (abilities.swarm > 0 && o.type==='hazard') {
@@ -447,7 +493,8 @@
 
       // close-call detection (for non-hazard skimming of hazards)
       if (o.type==='hazard' && !o.near) {
-        if (d2 < (collideR+26)*(collideR+26) && d2 > collideR*collideR) {
+        const ccRange = curDim().perk==='closecall' ? 46 : 26; // NEON VOID widens the bonus zone
+        if (d2 < (collideR+ccRange)*(collideR+ccRange) && d2 > collideR*collideR) {
           o.near = true;
           const g = addScore(15);
           popText(player.x, player.y - 22, '+' + g + ' CLOSE!', '#7af0ff');
@@ -460,9 +507,9 @@
 
       if (d2 < collideR*collideR) {
         if (o.type==='hazard') {
-          if (abilities.ghost > 0) {
-            // INVISIBLE: phase through harmlessly + spark feedback
-            burst(o.x, o.y, '#bfe0ff', 4, 3);
+          if (abilities.ghost > 0 || shield > 0) {
+            // INVISIBLE / warp-shield: phase through harmlessly + spark feedback
+            burst(o.x, o.y, shield > 0 ? '#ffffff' : '#bfe0ff', 4, 3);
           } else {
             die(now);
             return;
@@ -474,6 +521,7 @@
         } else if (o.type==='gold') {
           slowmo = 70; // ~ a bit over a second of slow-mo
           const g = addScore(60); bumpCombo();
+          if (curDim().perk==='combo2') { combo++; if (combo>maxCombo) maxCombo=combo; }
           popText(o.x, o.y, '+' + g, '#ffd86b', true);
           burst(o.x,o.y,'#ffd86b',26,6);
           shake = Math.min(1, shake+0.5);
@@ -483,6 +531,7 @@
           orbs.splice(i,1);
         } else {
           const g = addScore(10); bumpCombo();
+          if (curDim().perk==='combo2') { combo++; if (combo>maxCombo) maxCombo=combo; }
           popText(o.x, o.y, '+' + g, frenzy > 0 ? '#ff5ed0' : '#aef3ff');
           burst(o.x,o.y, frenzy > 0 ? '#ff5ed0' : '#7ad1ff',12,4.5);
           shake = Math.min(1, shake+0.15);
@@ -523,10 +572,15 @@
     ctx.clearRect(0,0,W,H);
     ctx.translate(ox,oy);
 
-    // stars
+    // dimension backdrop
+    ctx.fillStyle = curDim().bg;
+    ctx.fillRect(-ox-14,-oy-14,W+28,H+28);
+
+    // stars (tinted to the current dimension)
+    const starCol = curDim().star;
     for (const s of stars) {
       ctx.globalAlpha = s.z*0.7;
-      ctx.fillStyle = '#9fc0ff';
+      ctx.fillStyle = starCol;
       ctx.beginPath(); ctx.arc(s.x,s.y,s.s,0,7); ctx.fill();
     }
     ctx.globalAlpha = 1;
@@ -663,6 +717,15 @@
         ctx.beginPath(); ctx.arc(player.x,player.y,player.r+22+4*Math.sin(now*0.008),0,7); ctx.stroke();
         ctx.restore();
       }
+      // WARP SHIELD: bright protective ring right after a dimension jump
+      if (shield>0){
+        ctx.save();
+        ctx.globalAlpha=Math.min(1, shield)*(0.6+0.4*Math.sin(now*0.02));
+        ctx.strokeStyle='#ffffff'; ctx.lineWidth=3;
+        ctx.shadowColor='#bfe0ff'; ctx.shadowBlur=18;
+        ctx.beginPath(); ctx.arc(player.x,player.y,player.r+12+3*Math.sin(now*0.01),0,7); ctx.stroke();
+        ctx.restore();
+      }
       // glow ring on collect
       if (ringPulse>0){
         ctx.globalAlpha=ringPulse;
@@ -698,8 +761,13 @@
       ctx.font='700 13px system-ui'; ctx.fillStyle=pal.glow;
       ctx.fillText('SPEED x'+(1+speedLevel)+'   '+(eaten%50)+'/50', 18, 70);
 
+      // dimension indicator + progress to next warp (every 25 orbs)
+      const dm = curDim();
+      ctx.font='800 12px system-ui'; ctx.fillStyle=dm.star||'#9fc0ff';
+      ctx.fillText('◈ DIM '+(dimension+1)+' · '+dm.name+'   '+(eaten%25)+'/25', 18, 88);
+
       // active ability timers
-      let ay = 92;
+      let ay = 110;
       const chip = (label, secs, col) => {
         ctx.textAlign='left';
         ctx.font='800 14px system-ui'; ctx.fillStyle=col;
