@@ -66,7 +66,9 @@
       Skim hazards for <b>close-call bonuses</b>. Grab gold for <b>slow-mo</b>.<br><br>
       Catch <b>power orbs</b> (30s each): <b style="color:#5dff8f">Magnet</b> pulls orbs in,
       <b style="color:#bfe0ff">Invisible</b> lets red shards pass through you — but the
-      <b style="color:#ff4060">red Swarm</b> makes every hazard hunt you. Avoid that one.
+      <b style="color:#ff4060">red Swarm</b> makes every hazard hunt you. Avoid that one.<br><br>
+      Every <b>25 orbs</b> you <b style="color:#b59cff">warp to a new dimension</b> — the world re-themes and the
+      <b>physics change</b>: floaty zero-G drift, heavy magnetic pull, hyperspeed, fiery turbulence, a gravity well, and more.
     </div>
     <div class="pulse">Tap the board (or press SPACE) to start</div>
   </div>
@@ -200,14 +202,23 @@
     { core:'#9adcff', glow:'#3aa0ff' }  // blue
   ];
 
-  // dimensions cycle every 25 orbs — each re-themes the world, adds a perk, raises difficulty
+  // dimensions cycle every 25 orbs — each re-themes the world, adds a perk, changes the
+  // PHYSICS (how the orb moves), the ambient VISUAL fx, and raises difficulty.
+  //   phys.follow = responsiveness toward your finger   phys.resp = inertia (1 = tight, low = floaty)
+  //   phys.pull   = gravity-well strength toward center  phys.wobble = chaotic jitter  phys.omul = orb-speed mult
   const DIMENSIONS = [
-    { name:'PRISM',       bg:'#05060f', star:'#9fc0ff', perk:null,        blurb:'' },
-    { name:'NEON VOID',   bg:'#0b0518', star:'#d59cff', perk:'closecall', blurb:'wider close-calls' },
-    { name:'MAGNETAR',    bg:'#03121b', star:'#7af0ff', perk:'magnet',    blurb:'orbs drift to you' },
-    { name:'GOLD RUSH',   bg:'#15110a', star:'#ffd86b', perk:'goldrush',  blurb:'extra gold' },
-    { name:'INFERNO',     bg:'#1a0607', star:'#ff9a7a', perk:'combo2',    blurb:'double combo gain' },
-    { name:'SINGULARITY', bg:'#0c0119', star:'#b59cff', perk:'slowpulse', blurb:'time stutters' }
+    { name:'PRISM',       bg:'#05060f', star:'#9fc0ff', perk:null,        blurb:'',
+      fx:null,      phys:{ follow:1.00, resp:1.00, pull:0,     wobble:0,   omul:1.00 } },
+    { name:'NEON VOID',   bg:'#0b0518', star:'#d59cff', perk:'closecall', blurb:'zero-G drift · wider close-calls',
+      fx:'grid',    phys:{ follow:0.85, resp:0.10, pull:0,     wobble:0,   omul:0.95 } },
+    { name:'MAGNETAR',    bg:'#03121b', star:'#7af0ff', perk:'magnet',    blurb:'heavy & magnetic · orbs drift in',
+      fx:'rings',   phys:{ follow:0.90, resp:0.26, pull:0,     wobble:0,   omul:1.00 } },
+    { name:'GOLD RUSH',   bg:'#15110a', star:'#ffd86b', perk:'goldrush',  blurb:'hyperspeed · extra gold',
+      fx:'sparkle', phys:{ follow:1.40, resp:0.90, pull:0,     wobble:0,   omul:1.15 } },
+    { name:'INFERNO',     bg:'#1a0607', star:'#ff9a7a', perk:'combo2',    blurb:'turbulence · double combo',
+      fx:'embers',  phys:{ follow:1.00, resp:0.55, pull:0,     wobble:2.4, omul:1.30 } },
+    { name:'SINGULARITY', bg:'#0c0119', star:'#b59cff', perk:'slowpulse', blurb:'gravity well · time stutters',
+      fx:'vortex',  phys:{ follow:0.95, resp:0.42, pull:0.045, wobble:0,   omul:1.00 } }
   ];
   function curDim() { return DIMENSIONS[dimension % DIMENSIONS.length]; }
 
@@ -255,7 +266,7 @@
     else { x=-30; y=rand(0,H); }
     const tx = rand(W*.2, W*.8), ty = rand(H*.2, H*.8);
     const ang = Math.atan2(ty-y, tx-x);
-    const baseSpeed = 1.0 + elapsed*0.018 + dimension*0.12;
+    const baseSpeed = (1.0 + elapsed*0.018 + dimension*0.12) * curDim().phys.omul;
     const speed = rand(baseSpeed, baseSpeed*1.7);
 
     const roll = Math.random();
@@ -346,6 +357,7 @@
   // warp into the next dimension: re-theme, new perk, harder
   function warpDimension() {
     dimension++;
+    player.vx = 0; player.vy = 0;   // reset momentum so the new physics doesn't fling you
     const d = curDim();
     flashMsg = '◈ DIMENSION ' + (dimension+1) + ' ◈  ' + d.name + (d.blurb ? '  ·  ' + d.blurb : '');
     flashT = 1.5;
@@ -452,12 +464,32 @@
       else comboTimer = 0;
     }
 
-    // smoothly follow the drag target — responsiveness grows +1 per level
-    const follow = Math.min(0.9, 0.34 + speedLevel * 0.05);
-    player.x += (drag.tx - player.x) * Math.min(1, follow*dt);
-    player.y += (drag.ty - player.y) * Math.min(1, follow*dt);
-    player.x = Math.max(player.r, Math.min(W-player.r, player.x));
-    player.y = Math.max(player.r, Math.min(H-player.r, player.y));
+    // ---- movement: velocity model whose feel is set by the current dimension ----
+    // PRISM (resp 1) reproduces the tight lerp; lower resp = floaty momentum / drift.
+    const ph = curDim().phys;
+    const follow = Math.min(0.95, (0.34 + speedLevel * 0.05) * ph.follow);
+    const step = Math.min(1, follow * dt);          // lerp fraction of distance this frame
+    const idt = 1 / Math.max(dt, 0.0001);
+    // target velocity (px/frame) that, at resp=1, makes x += tvx*dt == pure lerp
+    let tvx = (drag.tx - player.x) * step * idt;
+    let tvy = (drag.ty - player.y) * step * idt;
+    // SINGULARITY: space bends toward the center (gravity well)
+    if (ph.pull) { tvx += (W/2 - player.x) * ph.pull; tvy += (H/2 - player.y) * ph.pull; }
+    // INFERNO: turbulent jitter shoves the orb around
+    if (ph.wobble) {
+      tvx += Math.sin(now*0.006 + player.y*0.03) * ph.wobble;
+      tvy += Math.cos(now*0.0075 + player.x*0.03) * ph.wobble;
+    }
+    const resp = Math.min(1, ph.resp * dt);          // how fast velocity catches the target
+    player.vx += (tvx - player.vx) * resp;
+    player.vy += (tvy - player.vy) * resp;
+    player.x += player.vx * dt;
+    player.y += player.vy * dt;
+    // walls: clamp + soft bounce so momentum dims don't stick to the edge
+    if (player.x < player.r)      { player.x = player.r;      player.vx *= -0.35; }
+    if (player.x > W - player.r)  { player.x = W - player.r;  player.vx *= -0.35; }
+    if (player.y < player.r)      { player.y = player.r;      player.vy *= -0.35; }
+    if (player.y > H - player.r)  { player.y = H - player.r;  player.vy *= -0.35; }
     player.trail.push({x:player.x, y:player.y});
     if (player.trail.length > 14) player.trail.shift();
 
@@ -565,6 +597,72 @@
   }
 
   // ---- rendering ----
+  // per-dimension ambient backdrop animation
+  function renderAmbient(now) {
+    const d = curDim();
+    if (!d.fx) return;
+    const cx = W/2, cy = H/2;
+    ctx.save();
+    if (d.fx === 'grid') {
+      // NEON VOID: glowing scrolling grid (sells the zero-G drift)
+      ctx.strokeStyle = d.star; ctx.lineWidth = 1; ctx.globalAlpha = 0.12;
+      const sp = 64, off = (now*0.03) % sp;
+      for (let x=off; x<W; x+=sp){ ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,H); ctx.stroke(); }
+      for (let y=off; y<H; y+=sp){ ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(W,y); ctx.stroke(); }
+    } else if (d.fx === 'rings') {
+      // MAGNETAR: magnetic field rings expanding from center
+      ctx.strokeStyle = d.star; ctx.lineWidth = 2;
+      for (let k=0;k<5;k++){
+        const r = (now*0.05 + k*120) % 620;
+        ctx.globalAlpha = 0.16 * (1 - r/620);
+        ctx.beginPath(); ctx.arc(cx,cy,r,0,7); ctx.stroke();
+      }
+    } else if (d.fx === 'sparkle') {
+      // GOLD RUSH: drifting gold motes
+      ctx.fillStyle = d.star;
+      for (let k=0;k<44;k++){
+        const t = now*0.045 + k*97;
+        const x = (k*53) % W;
+        const y = (t % (H+40)) - 20;
+        ctx.globalAlpha = 0.20 + 0.25*Math.sin(t*0.1);
+        ctx.beginPath(); ctx.arc(x,y,1.5,0,7); ctx.fill();
+      }
+    } else if (d.fx === 'embers') {
+      // INFERNO: rising embers + heat vignette
+      ctx.fillStyle = '#ff7a3a';
+      for (let k=0;k<38;k++){
+        const t = now*0.05 + k*131;
+        const x = ((k*71) % W) + Math.sin(t*0.05)*16;
+        const y = H - (t % (H+40)) + 20;
+        ctx.globalAlpha = 0.32 * (y/H);
+        ctx.beginPath(); ctx.arc(x,y,1.7,0,7); ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+      const vg = ctx.createRadialGradient(cx,cy,H*0.28,cx,cy,H*0.72);
+      vg.addColorStop(0,'rgba(0,0,0,0)'); vg.addColorStop(1,'rgba(150,18,0,0.35)');
+      ctx.fillStyle = vg; ctx.fillRect(0,0,W,H);
+    } else if (d.fx === 'vortex') {
+      // SINGULARITY: spiral accretion arms + dark core (the gravity well you feel)
+      ctx.strokeStyle = d.star; ctx.lineWidth = 2;
+      for (let k=0;k<3;k++){
+        ctx.globalAlpha = 0.12;
+        ctx.beginPath();
+        for (let a=0; a<6.5; a+=0.15){
+          const r = 26 + a*24;
+          const ang = a + now*0.0013*(k+1) + k*2.1;
+          const x = cx + Math.cos(ang)*r, y = cy + Math.sin(ang)*r;
+          a===0 ? ctx.moveTo(x,y) : ctx.lineTo(x,y);
+        }
+        ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+      const cg = ctx.createRadialGradient(cx,cy,0,cx,cy,100);
+      cg.addColorStop(0,'rgba(0,0,0,0.85)'); cg.addColorStop(0.7,'rgba(0,0,0,0.35)'); cg.addColorStop(1,'rgba(0,0,0,0)');
+      ctx.fillStyle = cg; ctx.beginPath(); ctx.arc(cx,cy,100,0,7); ctx.fill();
+    }
+    ctx.restore();
+  }
+
   function render(now) {
     let ox=0, oy=0;
     if (shake>0){ const m=shake*9; ox=rand(-m,m); oy=rand(-m,m); }
@@ -584,6 +682,9 @@
       ctx.beginPath(); ctx.arc(s.x,s.y,s.s,0,7); ctx.fill();
     }
     ctx.globalAlpha = 1;
+
+    // dimension ambient effect (grid / rings / sparkle / embers / vortex)
+    renderAmbient(now);
 
     // slow-mo tint
     if (slowmo>0){
